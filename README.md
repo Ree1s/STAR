@@ -20,20 +20,16 @@
     <div>
         <h4 align="center">
             <a href="https://nju-pcalab.github.io/projects/STAR" target='_blank'>
-                <img src="https://img.shields.io/badge/🌟-Project%20Page-blue" style="padding-right: 20px;">
+                <img src="https://img.shields.io/badge/🌟-Project%20Page-blue">
             </a>
             <a href="https://arxiv.org/abs/2501.02976" target='_blank'>
-                <img src="https://img.shields.io/badge/arXiv-2501.02976-b31b1b.svg" style="padding-right: 20px;">
+                <img src="https://img.shields.io/badge/arXiv-2501.02976-b31b1b.svg">
             </a>
             <a href="https://youtu.be/hx0zrql-SrU" target='_blank'>
-                <img src="https://img.shields.io/badge/Demo%20Video-%23FF0000.svg?logo=YouTube&logoColor=white" style="padding-right: 20px;">
+                <img src="https://img.shields.io/badge/Demo%20Video-%23FF0000.svg?logo=YouTube&logoColor=white">
             </a>
-            <br>
             <a href="https://huggingface.co/spaces/SherryX/STAR" target='_blank'>
                 <img src="https://img.shields.io/static/v1?label=Demo STAR&message=HuggingFace&color=yellow">
-            </a>
-            <a href="https://colab.research.google.com/drive/1K8A1U_BNpAteRhhW9A8pAYs6LWjItQs_?usp=sharing" target='_blank'>
-                <img src="https://img.shields.io/static/v1?label=Demo STAR&message=Google Colab&color=orange">
             </a>
         </h4>
     </div>
@@ -41,9 +37,7 @@
 
 
 ## 🔆 Updates
-- **2025.01.19** The STAR demo is now available on [Google Colab](https://colab.research.google.com/drive/1K8A1U_BNpAteRhhW9A8pAYs6LWjItQs_?usp=sharing). Feel free to give it a try!
-
-- **2025.01.09** The online demo of STAR on [Hugging Face](https://huggingface.co/spaces/SherryX/STAR) is now live! Please note that due to the duration limitation of ZeroGPU, the running time may exceed the allocated GPU duration. If you'd like to try it, you can duplicate the demo and assign a paid GPU.
+- **2025.01.09** The online demo of [STAR](https://huggingface.co/spaces/SherryX/STAR) is now live! Please note that due to the duration limitation of ZeroGPU, the running time may exceed the allocated GPU duration. If you'd like to try it, you can duplicate the demo and assign a paid GPU.
 
 - **2025.01.07**  The pretrained STAR model (I2VGen-XL and CogVideoX-5B versions) and inference code have been released.
 
@@ -65,8 +59,6 @@
 
 
 ## ⚙️ Dependencies and Installation
-**VRAM requirement**: Upscaling the provided toy example by 4x, with 72 frames, a width of 426, and a height of 240, requires around 39GB of VRAM using the default settings. If you encounter an OOM problem, you can set a smaller frame_length in inference_sr.sh. We recommend using a GPU with at least 24GB of VRAM to run this project. 
-
 ```
 ## git clone this repository
 git clone https://github.com/NJU-PCALab/STAR.git
@@ -76,7 +68,7 @@ cd STAR
 conda create -n star python=3.10
 conda activate star
 pip install -r requirements.txt
-sudo apt-get update && sudo apt-get install ffmpeg libsm6 libxext6  -y
+sudo apt-get update && apt-get install ffmpeg libsm6 libxext6  -y
 ```
 
 ## 🚀 Inference
@@ -108,6 +100,7 @@ You need to change the paths in `video_super_resolution/scripts/inference_sr.sh`
 ```
 bash video_super_resolution/scripts/inference_sr.sh
 ```
+If you encounter an OOM problem, you can set a smaller `frame_length` in `inference_sr.sh`.
 
 ### 2. CogVideoX-based
 Refer to these [instructions](https://github.com/NJU-PCALab/STAR/tree/main/cogvideox-based#cogvideox-based-model-inference) for inference with the CogVideX-5B-based model.

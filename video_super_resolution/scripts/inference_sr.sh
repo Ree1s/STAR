@@ -1,8 +1,17 @@
 #!/bin/bash
+# Set HIP_VISIBLE_DEVICES to specify which GPU(s) to use
+export HIP_VISIBLE_DEVICES=1
 
+# Set MIOpen cache and database paths to avoid SQLite errors
+export MIOPEN_USER_DB_PATH="/tmp/my-miopen-cache"
+export MIOPEN_CUSTOM_CACHE_DIR=${MIOPEN_USER_DB_PATH}
+
+# Clear and recreate the MIOpen cache directory
+rm -rf ${MIOPEN_USER_DB_PATH}
+mkdir -p ${MIOPEN_USER_DB_PATH}
 # Folder paths
-video_folder_path='./input/video'
-txt_file_path='./input/text/prompt.txt'
+video_folder_path='./input/apt/'
+txt_file_path='./input/text/apt.txt'
 
 # Get all .mp4 files in the folder using find to handle special characters
 mapfile -t mp4_files < <(find "$video_folder_path" -type f -name "*.mp4")
@@ -17,7 +26,7 @@ done
 mapfile -t lines < <(grep -v '^\s*$' "$txt_file_path")
 
 # The number of video frames processed simultaneously during each denoising process.
-frame_length=32
+frame_length=24
 
 # Debugging output
 echo "Number of MP4 files: ${#mp4_files[@]}"
@@ -45,12 +54,12 @@ for i in "${!mp4_files[@]}"; do
         --solver_mode 'fast' \
         --steps 15 \
         --input_path "${mp4_file}" \
-        --model_path ./pretrained_weight/model.pt \
+        --model_path ./pretrained_weight/heavy_deg.pt \
         --prompt "${line}" \
         --upscale 4 \
         --max_chunk_len ${frame_length} \
         --file_name "${file_name}.mp4" \
-        --save_dir ./results
+        --save_dir ./apt_results_i2vheavy_wprompt
 done
 
 echo "All videos processed successfully."

@@ -24,7 +24,7 @@ class FrozenOpenCLIPEmbedder(nn.Module):
                  layer='penultimate'):
         super().__init__()
         assert layer in self.LAYERS
-        model, _, _ = open_clip.create_model_and_transforms(arch, device=torch.device('cpu'), pretrained=pretrained)
+        model, _, _ = open_clip.create_model_and_transforms(arch, device=torch.device('cpu'), pretrained=pretrained,  cache_dir='/group/ossdphi_algo_scratch_14/sichegao/checkpoints')
 
         del model.visual
         self.model = model

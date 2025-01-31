@@ -83,26 +83,60 @@ def load_video(vid_path):
     capture.release()
     return frame_list, _fps
 
+import os
+import cv2
+import numpy as np
 
 def save_video(video, save_dir, file_name, fps=16.0):
+    """
+    Save a sequence of video frames as a video file without using ffmpeg.
+
+    Args:
+        video (list): A list of video frames as numpy arrays.
+        save_dir (str): Directory where the video will be saved.
+        file_name (str): Name of the output video file.
+        fps (float): Frames per second for the output video.
+    """
+    # Ensure the save directory exists
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Define the path for the output video file
     output_path = os.path.join(save_dir, file_name)
-    images = [(img.numpy()).astype('uint8') for img in video]
-    temp_dir = tempfile.mkdtemp()
     
-    for fid, frame in enumerate(images):
-        tpth = os.path.join(temp_dir, '%06d.png' % (fid + 1))
-        cv2.imwrite(tpth, frame[:, :, ::-1])
+    # Get the frame size from the first frame
+    frame_height, frame_width = video[0].shape[:2]
     
-    tmp_path = os.path.join(save_dir, 'tmp.mp4')
-    cmd = f'ffmpeg -y -f image2 -framerate {fps} -i {temp_dir}/%06d.png \
-     -vcodec libx264 -preset ultrafast -crf 0 -pix_fmt yuv420p {tmp_path}'
+    # Define the video codec and initialize VideoWriter
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # MPEG-4 codec
+    video_writer = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
     
-    status, output = subprocess.getstatusoutput(cmd)
-    if status != 0:
-        logger.error('Save Video Error with {}'.format(output))
+    # Write each frame to the video file
+    for frame in video:
+        frame_uint8 = (frame.numpy()).astype('uint8')  # Convert frame to uint8 if necessary
+        video_writer.write(frame_uint8[:, :, ::-1])  # Convert RGB to BGR for OpenCV
     
-    os.system(f'rm -rf {temp_dir}')
-    os.rename(tmp_path, output_path)
+    # Release the VideoWriter
+    video_writer.release()
+
+# def save_video(video, save_dir, file_name, fps=16.0):
+#     output_path = os.path.join(save_dir, file_name)
+#     images = [(img.numpy()).astype('uint8') for img in video]
+#     temp_dir = tempfile.mkdtemp()
+    
+#     for fid, frame in enumerate(images):
+#         tpth = os.path.join(temp_dir, '%06d.png' % (fid + 1))
+#         cv2.imwrite(tpth, frame[:, :, ::-1])
+    
+#     tmp_path = os.path.join(save_dir, 'tmp.mp4')
+#     cmd = f'ffmpeg -y -f image2 -framerate {fps} -i {temp_dir}/%06d.png \
+#      -vcodec libx264 -preset ultrafast -crf 0 -pix_fmt yuv420p {tmp_path}'
+    
+#     status, output = subprocess.getstatusoutput(cmd)
+#     if status != 0:
+#         logger.error('Save Video Error with {}'.format(output))
+    
+#     os.system(f'rm -rf {temp_dir}')
+#     os.rename(tmp_path, output_path)
 
 
 

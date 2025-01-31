@@ -55,7 +55,7 @@ class VideoToVideo_sr():
 
         # Temporal VAE
         vae = AutoencoderKLTemporalDecoder.from_pretrained(
-            "stabilityai/stable-video-diffusion-img2vid", subfolder="vae", variant="fp16"
+            "stabilityai/stable-video-diffusion-img2vid", cache_dir="/group/ossdphi_algo_scratch_14/sichegao/checkpoints", subfolder="vae", variant="fp16"
         )
         vae.eval()
         vae.requires_grad_(False)
@@ -91,6 +91,7 @@ class VideoToVideo_sr():
         video_data = video_data.to(self.device)
 
         video_data_feature = self.vae_encode(video_data)
+        torch.save(video_data_feature, "latents.pt")
         torch.cuda.empty_cache()
 
         y = self.text_encoder(y).detach()
