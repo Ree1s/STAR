@@ -4,12 +4,12 @@ image_size = (256, 256)
 
 # Define model
 model = dict(
-    type="MVDiT-XL/2",
+    type="STDiT-XL/2",
     space_scale=0.5,
-    time_scale=1.0,  
+    time_scale=1.0,
     enable_flashattn=True,
-    enable_layernorm_kernel=False,
-    from_pretrained=None,
+    enable_layernorm_kernel=True,
+    from_pretrained="",
 )
 vae = dict(
     type="VideoAutoencoderKL",
@@ -27,8 +27,8 @@ scheduler = dict(
     cfg_scale=7.0,
     cfg_channel=3,
 )
-# dtype = "fp32"
-dtype = "bf16"
+dtype = "fp16"
+#dtype = "bf16"
 
 # Others
 batch_size = 1

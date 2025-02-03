@@ -1,0 +1,25 @@
+// {
+//     // Use IntelliSense to learn about possible attributes.
+//     // Hover to view descriptions of existing attributes.
+//     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+//     "version": "0.2.0",
+//     "configurations": [
+//         {
+//             "name": "Python Debugger: Current File",
+//             "type": "debugpy",
+//             "request": "launch",
+//             "program": "-m",
+//             "console": "integratedTerminal",
+//             "justMyCode": true,
+//             "args": [
+//                 "torch.distributed.run",
+//                 "--nnodes=1",
+//                 "--nproc_per_node=1",
+//                 "scripts/train.py",
+//                 "--config",
+//                 "configs/mvdit/train/16x256x256.py"
+//               ],
+//             "env": {"MIOPEN_CUSTOM_CACHE_DIR": "/group/ossdphi_algo_scratch_14/sichegao/miopen_cache"}
+//         }
+//     ]
+// }

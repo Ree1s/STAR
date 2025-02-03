@@ -10,7 +10,18 @@ open-clip-torch==2.20.0
 fairscale==0.4.13
 torchsde==0.2.6
 pytorch-lightning==2.0.1
-diffusers==0.30.0
+# diffusers==0.30.0
 huggingface_hub==0.23.3
 gradio==4.41.0
 numpy==1.24
+colossalai
+ftfy
+gdown
+mmengine
+pre-commit
+pyav
+tensorboard
+timm
+tqdm
+transformers
+wandb

@@ -1,17 +1,19 @@
 #!/bin/bash
 # Set HIP_VISIBLE_DEVICES to specify which GPU(s) to use
-export HIP_VISIBLE_DEVICES=1
+export HIP_VISIBLE_DEVICES=0
 
 # Set MIOpen cache and database paths to avoid SQLite errors
-export MIOPEN_USER_DB_PATH="/tmp/my-miopen-cache"
+# export MIOPEN_USER_DB_PATH="/tmp/my-miopen-cache"
+export MIOPEN_USER_DB_PATH="/group/ossdphi_algo_scratch_14/sichegao/miopen_cache"
+
 export MIOPEN_CUSTOM_CACHE_DIR=${MIOPEN_USER_DB_PATH}
 
 # Clear and recreate the MIOpen cache directory
 rm -rf ${MIOPEN_USER_DB_PATH}
 mkdir -p ${MIOPEN_USER_DB_PATH}
 # Folder paths
-video_folder_path='./input/apt/'
-txt_file_path='./input/text/apt.txt'
+video_folder_path='./input/video/'
+txt_file_path='./input/text/prompt.txt'
 
 # Get all .mp4 files in the folder using find to handle special characters
 mapfile -t mp4_files < <(find "$video_folder_path" -type f -name "*.mp4")

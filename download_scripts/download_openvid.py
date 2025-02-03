@@ -11,7 +11,7 @@ def download_files(output_directory):
 
     error_log_path = os.path.join(zip_folder, "download_log.txt")
 
-    for i in range(0, 186):
+    for i in range(0, 1):
         url = f"https://huggingface.co/datasets/nkp37/OpenVid-1M/resolve/main/OpenVid_part{i}.zip"
         file_path = os.path.join(zip_folder, f"OpenVid_part{i}.zip")
         if os.path.exists(file_path):
