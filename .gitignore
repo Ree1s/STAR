@@ -2,7 +2,15 @@
 *.mp4
 
 # 示例：忽略特定目录（如模型文件夹）
-models/
+input/
+dataset/
+dowload_scripts/
+experiments/
+flash-attention/
+mmcv/
+Open-Sora/
+outputs/
+rocm-apex/
 pretrained_weights/
 
 # 示例：忽略所有 .pt 模型文件
