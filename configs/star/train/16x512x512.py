@@ -13,12 +13,12 @@ dataset = dict(
 
 # Define model settings
 model = dict(
-    type="VideoToVideo_SR",  # Model type (Video-to-Video Super Resolution)
+    type="VideoToVideo_sr",  # Model type (Video-to-Video Super Resolution)
     space_scale=1.0,  # Scaling factor for space (spatial resolution)
     time_scale=1.0,  # Scaling factor for time (temporal resolution)
     from_pretrained="path_to_pretrained_model",  # Pretrained model path
-    enable_flashattn=False,  # Whether to enable flash attention
-    enable_layernorm_kernel=False,  # Enable layer normalization kernel optimization
+    enable_flashattn=True,  # Whether to enable flash attention
+    enable_layernorm_kernel=True,  # Enable layer normalization kernel optimization
 )
 
 # Define VAE settings
