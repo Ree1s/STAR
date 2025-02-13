@@ -103,20 +103,28 @@ def save_json(data, file_path: str):
         json.dump(data, f, indent=4)
 
 
-def remove_padding(tensor: torch.Tensor, original_shape: Tuple) -> torch.Tensor:
-    return tensor[: functools.reduce(operator.mul, original_shape)]
+# def remove_padding(tensor: torch.Tensor, original_shape: Tuple) -> torch.Tensor:
+#     return tensor[: functools.reduce(operator.mul, original_shape)]
 
 
+# def model_gathering(model: torch.nn.Module, model_shape_dict: dict):
+#     global_rank = dist.get_rank()
+#     global_size = dist.get_world_size()
+#     for name, param in model.named_parameters():
+#         all_params = [torch.empty_like(param.data) for _ in range(global_size)]
+#         dist.all_gather(all_params, param.data, group=dist.group.WORLD)
+#         if int(global_rank) == 0:
+#             all_params = torch.cat(all_params)
+#             param.data = remove_padding(all_params, model_shape_dict[name]).view(model_shape_dict[name])
+#     dist.barrier()
 def model_gathering(model: torch.nn.Module, model_shape_dict: dict):
     global_rank = dist.get_rank()
-    global_size = dist.get_world_size()
-    for name, param in model.named_parameters():
-        all_params = [torch.empty_like(param.data) for _ in range(global_size)]
-        dist.all_gather(all_params, param.data, group=dist.group.WORLD)
-        if int(global_rank) == 0:
-            all_params = torch.cat(all_params)
-            param.data = remove_padding(all_params, model_shape_dict[name]).view(model_shape_dict[name])
+
+    if global_rank == 0:
+        for name, param in model.state_dict().items():
+            model_shape_dict[name].copy_(param)
     dist.barrier()
+    
 
 
 def record_model_param_shape(model: torch.nn.Module) -> dict:
@@ -124,10 +132,15 @@ def record_model_param_shape(model: torch.nn.Module) -> dict:
     for name, param in model.named_parameters():
         param_shape[name] = param.shape
     return param_shape
-
+import torch
+import os
+import torch.distributed as dist
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
+from typing import Dict
+from torch import nn
 
 def save(
-    booster: Booster,
     model: nn.Module,
     ema: nn.Module,
     optimizer: Optimizer,
@@ -136,49 +149,126 @@ def save(
     step: int,
     global_step: int,
     batch_size: int,
-    coordinator: DistCoordinator,
     save_dir: str,
     shape_dict: dict,
 ):
     save_dir = os.path.join(save_dir, f"epoch{epoch}-global_step{global_step}")
     os.makedirs(os.path.join(save_dir, "model"), exist_ok=True)
+    # Save the model (standard PyTorch model saving)
+    # if dist.get_rank() == 0:  # Only save from rank 0
+    torch.save(model.state_dict(), os.path.join(save_dir, "model.pth"))
 
-    booster.save_model(model, os.path.join(save_dir, "model"), shard=True)
-    # ema is not boosted, so we don't need to use booster.save_model
-    model_gathering(ema, shape_dict)
-    global_rank = dist.get_rank()
-    if int(global_rank) == 0:
-        torch.save(ema.state_dict(), os.path.join(save_dir, "ema.pt"))
-        model_sharding(ema)
+# EMA is not part of the boosted model, so we save it directly
+# if dist.get_world_size() != 1:
+#     model_gathering(ema, shape_dict)
+# if dist.get_rank() == 0:
+    torch.save(ema.state_dict(), os.path.join(save_dir, "ema.pt"))
+    # model_sharding(ema)
 
-    booster.save_optimizer(optimizer, os.path.join(save_dir, "optimizer"), shard=True, size_per_shard=4096)
+# Save optimizer state
+# if dist.get_rank() == 0:
+    torch.save(optimizer.state_dict(), os.path.join(save_dir, "optimizer.pth"))
+
+# Save learning rate scheduler state (if it exists)
     if lr_scheduler is not None:
-        booster.save_lr_scheduler(lr_scheduler, os.path.join(save_dir, "lr_scheduler"))
+        torch.save(lr_scheduler.state_dict(), os.path.join(save_dir, "lr_scheduler.pth"))
+
+    # Save training progress (running states)
     running_states = {
         "epoch": epoch,
         "step": step,
         "global_step": global_step,
         "sample_start_index": step * batch_size,
     }
-    if coordinator.is_master():
-        save_json(running_states, os.path.join(save_dir, "running_states.json"))
-    dist.barrier()
+    # if dist.get_rank() == 0:
+    save_json(running_states, os.path.join(save_dir, "running_states.json"))
+
+    # Sync all processes to ensure all save operations are completed
+    # print("entering save function")
+    # dist.barrier()
+    # print("passed barrier")
+
+# def save(
+#     booster: Booster,
+#     model: nn.Module,
+#     ema: nn.Module,
+#     optimizer: Optimizer,
+#     lr_scheduler: _LRScheduler,
+#     epoch: int,
+#     step: int,
+#     global_step: int,
+#     batch_size: int,
+#     coordinator: DistCoordinator,
+#     save_dir: str,
+#     shape_dict: dict,
+# ):
+#     save_dir = os.path.join(save_dir, f"epoch{epoch}-global_step{global_step}")
+#     os.makedirs(os.path.join(save_dir, "model"), exist_ok=True)
+
+#     booster.save_model(model, os.path.join(save_dir, "model"), shard=True)
+#     # ema is not boosted, so we don't need to use booster.save_model
+#     model_gathering(ema, shape_dict)
+#     global_rank = dist.get_rank()
+#     if int(global_rank) == 0:
+#         torch.save(ema.state_dict(), os.path.join(save_dir, "ema.pt"))
+#         model_sharding(ema)
+
+#     booster.save_optimizer(optimizer, os.path.join(save_dir, "optimizer"), shard=True, size_per_shard=4096)
+#     if lr_scheduler is not None:
+#         booster.save_lr_scheduler(lr_scheduler, os.path.join(save_dir, "lr_scheduler"))
+#     running_states = {
+#         "epoch": epoch,
+#         "step": step,
+#         "global_step": global_step,
+#         "sample_start_index": step * batch_size,
+#     }
+#     if coordinator.is_master():
+#         save_json(running_states, os.path.join(save_dir, "running_states.json"))
+#     dist.barrier()
 
 
+# def load(
+#     booster: Booster, model: nn.Module, ema: nn.Module, optimizer: Optimizer, lr_scheduler: _LRScheduler, load_dir: str
+# ) -> Tuple[int, int, int]:
+#     booster.load_model(model, os.path.join(load_dir, "model"))
+#     # ema is not boosted, so we don't use booster.load_model
+#     # ema.load_state_dict(torch.load(os.path.join(load_dir, "ema.pt")))
+#     ema.load_state_dict(torch.load(os.path.join(load_dir, "ema.pt"), map_location=torch.device("cpu")))
+#     booster.load_optimizer(optimizer, os.path.join(load_dir, "optimizer"))
+#     if lr_scheduler is not None:
+#         booster.load_lr_scheduler(lr_scheduler, os.path.join(load_dir, "lr_scheduler"))
+#     running_states = load_json(os.path.join(load_dir, "running_states.json"))
+#     dist.barrier()
+#     return running_states["epoch"], running_states["step"], running_states["sample_start_index"]
 def load(
-    booster: Booster, model: nn.Module, ema: nn.Module, optimizer: Optimizer, lr_scheduler: _LRScheduler, load_dir: str
+    model: nn.Module,
+    ema: nn.Module,
+    optimizer: Optimizer,
+    lr_scheduler: _LRScheduler,
+    load_dir: str
 ) -> Tuple[int, int, int]:
-    booster.load_model(model, os.path.join(load_dir, "model"))
-    # ema is not boosted, so we don't use booster.load_model
-    # ema.load_state_dict(torch.load(os.path.join(load_dir, "ema.pt")))
+    # 加载模型
+    if dist.get_rank() == 0:  # 仅主进程加载模型
+        model.load_state_dict(torch.load(os.path.join(load_dir, "model.pth"), map_location=torch.device("cpu")))
+    
+    # 加载 EMA 模型
     ema.load_state_dict(torch.load(os.path.join(load_dir, "ema.pt"), map_location=torch.device("cpu")))
-    booster.load_optimizer(optimizer, os.path.join(load_dir, "optimizer"))
-    if lr_scheduler is not None:
-        booster.load_lr_scheduler(lr_scheduler, os.path.join(load_dir, "lr_scheduler"))
+    
+    # 加载优化器
+    if dist.get_rank() == 0:  # 仅主进程加载优化器
+        optimizer.load_state_dict(torch.load(os.path.join(load_dir, "optimizer.pth"), map_location=torch.device("cpu")))
+    
+    # 加载学习率调度器
+    if lr_scheduler is not None and dist.get_rank() == 0:
+        lr_scheduler.load_state_dict(torch.load(os.path.join(load_dir, "lr_scheduler.pth"), map_location=torch.device("cpu")))
+    
+    # 加载训练进度状态
     running_states = load_json(os.path.join(load_dir, "running_states.json"))
+    
+    # 确保所有进程同步
     dist.barrier()
-    return running_states["epoch"], running_states["step"], running_states["sample_start_index"]
 
+    return running_states["epoch"], running_states["step"], running_states["sample_start_index"]
 
 def create_logger(logging_dir):
     """

@@ -12,13 +12,112 @@ from video_to_video.utils.config import cfg
 from video_to_video.diffusion.diffusion_sdedit import GaussianDiffusion
 from video_to_video.diffusion.schedules_sdedit import noise_schedule
 from video_to_video.utils.logger import get_logger
-
+from modelscope.models import TorchModel
 from diffusers import AutoencoderKLTemporalDecoder
 
 logger = get_logger()
+def get_low_pass_mask(height: int, width: int, cutoff_ratio: float = 0.1) -> torch.Tensor:
+    """
+    Create a 2D low-pass filter mask in the frequency domain.
+    
+    Args:
+        height (int): Height of the feature map.
+        width (int): Width of the feature map.
+        cutoff_ratio (float): Ratio to determine the radius of low-frequency region.
+    
+    Returns:
+        torch.Tensor: The low-pass mask with shape [1, 1, H, W] for broadcasting.
+    """
+    y = torch.linspace(-0.5, 0.5, height, device='cuda')
+    x = torch.linspace(-0.5, 0.5, width, device='cuda')
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+    dist = torch.sqrt(xx**2 + yy**2)
+    cutoff = cutoff_ratio / 2.0
+    mask = (dist <= cutoff).float()
+    return mask.unsqueeze(0).unsqueeze(0)  # shape: [1, 1, H, W]
 
-class VideoToVideo_sr():
-    def __init__(self, opt, device=torch.device(f'cuda:0')):
+def compute_df_loss(
+    model_pred_cond: torch.Tensor,
+    noise: torch.Tensor,
+    t: torch.Tensor,
+    diffusion,
+    vae,
+    ground_truth: torch.Tensor,
+    df_alpha: float,
+    chunk_size: int = 3,
+    cutoff_ratio: float = 0.1,
+    t_max: float = 999.0
+) -> torch.Tensor:
+    """
+    Compute the Dynamic Frequency (DF) loss on the conditional branch.
+    
+    The process is as follows:
+    1. Invert the predicted noise to estimate the high-res latent using the scaling factors αₜ and σₜ.
+    2. Decode the latent to pixel space.
+    3. Compute the 2D FFT of both the predicted and ground truth high-res videos.
+    4. Use a predefined low-pass filter to separate low- and high-frequency components.
+    5. Compute an MSE loss on both frequency bands, then weight them using a function of the timestep.
+
+    Args:
+        model_pred_cond (torch.Tensor): The generator output for the conditional branch (shape: [B, ...]).
+        noise (torch.Tensor): The noise tensor used in the diffusion process.
+        t (torch.Tensor): The timestep tensor (shape: [B]).
+        diffusion: An object providing diffusion-related functions (e.g. diffuse, get_scalings).
+        vae: The VAE model (or its decoder method) to decode latents back to pixel space.
+        ground_truth (torch.Tensor): The high-resolution ground truth video (shape: [B, F, C, H, W]).
+        df_alpha (float): Hyperparameter controlling the weighting function c(t).
+        chunk_size (int): Chunk size used in decoding (if your implementation uses chunking).
+        cutoff_ratio (float): Cutoff ratio for creating the low-pass filter.
+        t_max (float): Maximum diffusion timestep (used in weighting functions).
+
+    Returns:
+        torch.Tensor: The computed dynamic frequency loss.
+    """
+    # Obtain scaling factors α and σ for the timesteps.
+    alpha, sigma = diffusion.get_scalings(t)  # Expected shapes: [B, 1, 1, 1, 1]
+    # Invert predicted noise (or velocity) to get estimated high-res latent.
+    hat_Z_H = (alpha * noise - model_pred_cond) / sigma
+    # Decode the latent back to pixel space.
+    hat_X_H = vae.vae_decode_chunk(hat_Z_H, chunk_size=chunk_size)  # shape: [B, C, F, H, W]
+
+    # Reshape predicted and ground truth videos for FFT computation.
+    B, C, F, H, W = hat_X_H.shape
+    hat_X_H_reshaped = hat_X_H.permute(0, 2, 1, 3, 4).reshape(B * F, C, H, W)
+    gt_reshaped = ground_truth.reshape(B * ground_truth.shape[1],
+                                        ground_truth.shape[2],
+                                        ground_truth.shape[3],
+                                        ground_truth.shape[4])
+    
+    # Compute 2D FFT (using orthonormal normalization).
+    fft_hat = torch.fft.fft2(hat_X_H_reshaped, norm="ortho")
+    fft_gt = torch.fft.fft2(gt_reshaped, norm="ortho")
+    # Compare magnitudes.
+    mag_hat = torch.abs(fft_hat)
+    mag_gt = torch.abs(fft_gt)
+    
+    # Create a low-pass filter mask.
+    psi = get_low_pass_mask(H, W, cutoff_ratio)  # shape: [1, 1, H, W]
+    low_hat = mag_hat * psi
+    high_hat = mag_hat * (1 - psi)
+    low_gt = mag_gt * psi
+    high_gt = mag_gt * (1 - psi)
+    
+    # Compute low-frequency and high-frequency losses.
+    L_LF = F.mse_loss(low_hat, low_gt)
+    L_HF = F.mse_loss(high_hat, high_gt)
+    
+    # Compute weighting: c(t) = (t/t_max)^df_alpha and b(t) = 1 - t/t_max.
+    t_norm = t.float() / t_max  # shape: [B]
+    c_weight = (t_norm ** df_alpha).mean()
+    b_weight = (1 - t_norm).mean()
+    
+    # Combine losses.
+    L_DF = c_weight * L_LF + (1 - c_weight) * L_HF
+    # Optionally, you might multiply L_DF by b_weight to adjust its overall contribution.
+    return b_weight * L_DF
+class VideoToVideo_sr(TorchModel):
+    def __init__(self, opt=None, device=torch.device(f'cuda:0')):
+        super().__init__()
         self.opt = opt
         self.device = device # torch.device(f'cuda:0')
 
@@ -31,7 +130,7 @@ class VideoToVideo_sr():
         # U-Net with ControlNet
         generator = ControlledV2VUNet()
         generator = generator.to(self.device)
-        generator.eval()
+        # generator.eval()
 
         cfg.model_path = opt.model_path
         load_dict = torch.load(cfg.model_path, map_location='cpu')
@@ -39,7 +138,8 @@ class VideoToVideo_sr():
             load_dict = load_dict['state_dict']
         ret = generator.load_state_dict(load_dict, strict=False)
         
-        self.generator = generator.half()
+        # self.generator = generator
+        self.generator = generator
         logger.info('Load model path {}, with local status {}'.format(cfg.model_path, ret))
 
         # Noise scheduler
@@ -49,11 +149,20 @@ class VideoToVideo_sr():
             zero_terminal_snr=True,
             scale_min=2.0,
             scale_max=4.0)
+        # sigmas = noise_schedule(
+        #     schedule='logsnr_cosine_interp',
+        #     n=1000,
+        #     zero_terminal_snr=True,
+        #     scale_min=2.0,
+        #     scale_max=4.0)
         diffusion = GaussianDiffusion(sigmas=sigmas)
         self.diffusion = diffusion
         logger.info('Build diffusion with GaussianDiffusion')
 
         # Temporal VAE
+        # vae = AutoencoderKLTemporalDecoder.from_pretrained(
+        #     "stabilityai/stable-video-diffusion-img2vid", cache_dir="/group/ossdphi_algo_scratch_14/sichegao/checkpoints", subfolder="vae", variant="fp16"
+        # ).half()
         vae = AutoencoderKLTemporalDecoder.from_pretrained(
             "stabilityai/stable-video-diffusion-img2vid", cache_dir="/group/ossdphi_algo_scratch_14/sichegao/checkpoints", subfolder="vae", variant="fp16"
         )
@@ -68,10 +177,74 @@ class VideoToVideo_sr():
         self.negative_prompt = cfg.negative_prompt
         self.positive_prompt = cfg.positive_prompt
 
-        negative_y = text_encoder(self.negative_prompt).detach()
-        self.negative_y = negative_y
+
+        exceptions = ["VideoControlNet", "local1", "local2"]
+        self.freeze_parameters_except(self.generator, exceptions)
+        # negative_y = text_encoder(self.negative_prompt).detach()
+        # self.negative_y = negative_y
 
 
+
+
+    def train_losses(self, x, y, text, model_kwargs=None, noise=None):
+        B, T, C, H, W = x.shape
+        x = x.view(B * T, C, H, W)
+        x = F.interpolate(x, scale_factor=4, mode='bilinear')
+        x = x.view(B, T, C, x.shape[2], x.shape[3])
+        with torch.no_grad():
+            x = self.vae_encode(x)
+            y = self.vae_encode(y)
+            # print("x_encoded:", x.mean().item(), x.std().item())
+            # print("y_encoded:", y.mean().item(), y.std().item())
+            text = self.text_encoder(text)
+        if noise is None:
+            noise = torch.randn_like(y)
+        bs = y.shape[0]
+        # Sample a random timestep for each video
+        t = torch.randint(
+            0,
+            self.diffusion.num_timesteps,
+            (bs,),
+            device=y.device
+        )
+        noised_target = self.diffusion.diffuse(y, t)
+        # model_kwargs = [{'y': y}, {'y': self.negative_y}]
+        # model_kwargs.append({'hint': z})
+
+        # Get the target for loss depending on the prediction type
+        if self.opt.prediction_type == 'epsilon':
+            target = noise
+        elif self.opt.prediction_type == 'v_prediction':
+            target = self.diffusion.get_velocity(y, noise, t)
+        else:
+            raise ValueError(
+                f'Unknown prediction type {self.noise_scheduler.config.prediction_type}'
+            )
+        # with amp.autocast(enabled=True):
+
+        model_pred = self.generator(noised_target, t, text, hint=x)
+        # print("model_pred stats: mean =", model_pred.mean().item(), "std =", model_pred.std().item())
+
+
+        loss_v = F.mse_loss(model_pred, target)
+    #     loss_df = compute_df_loss(
+    #     model_pred,
+    #     noise,
+    #     t,
+    #     self.diffusion,
+    #     self.vae,
+    #     y,
+    #     df_alpha=self.opt.df_alpha,  # Hyperparameter (e.g., provided in self.opt.df_alpha)
+    #     chunk_size=3,
+    #     cutoff_ratio=0.1,
+    #     t_max=999.0
+    # )
+    
+        total_loss = loss_v 
+        # total_loss = loss_v + loss_df
+        print(loss_v.item())
+        # print(loss_df.item())
+        return total_loss
     def test(self, input: Dict[str, Any], total_noise_levels=1000, \
                  steps=50, solver_mode='fast', guide_scale=7.5, max_chunk_len=32):
         video_data = input['video_data']
@@ -91,7 +264,7 @@ class VideoToVideo_sr():
         video_data = video_data.to(self.device)
 
         video_data_feature = self.vae_encode(video_data)
-        torch.save(video_data_feature, "latents.pt")
+        # torch.save(video_data_feature, "latents.pt")
         torch.cuda.empty_cache()
 
         y = self.text_encoder(y).detach()
@@ -161,7 +334,17 @@ class VideoToVideo_sr():
         z = rearrange(z, "(b f) c h w -> b c f h w", f=num_f)
         return z * self.vae.config.scaling_factor
     
-
+    def freeze_parameters_except(self, module: torch.nn.Module, exceptions: list):
+        """
+        Freeze all parameters in `module` except those whose name contains one of the substrings in `exceptions`.
+        """
+        for name, param in module.named_parameters():
+            if any(exc in name for exc in exceptions):
+                param.requires_grad = True
+                # logger.info(f"Keeping parameter trainable: {name}")
+            else:
+                param.requires_grad = False
+                # logger.info(f"Freezing parameter: {name}")
 def pad_to_fit(h, w):
     BEST_H, BEST_W = 720, 1280
 

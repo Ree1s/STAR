@@ -13,9 +13,9 @@ from openvid.datasets.mmcv_transforms import (
     RandomJPEGCompression, RandomVideoCompression,
     UnsharpMasking, Clip, RescaleToZeroOne
 )
-from basicsr.data.transforms import single_random_crop, augment
+from basicsr.data.transforms import single_random_crop, augment, single_random_crop_video
 from basicsr.utils import img2tensor
-
+from omegaconf import OmegaConf
 
 class RealVSRCSVVideoDataset(Dataset):
     """
@@ -33,7 +33,7 @@ class RealVSRCSVVideoDataset(Dataset):
       }
     """
 
-    def __init__(self, cfg, csv_path, root):
+    def __init__(self, cfg):
         """
         Args:
             cfg (dict): The final config dictionary containing:
@@ -44,18 +44,18 @@ class RealVSRCSVVideoDataset(Dataset):
             root (str): Directory containing the .mp4 files
         """
         super().__init__()
-        self.cfg = cfg
-        self.csv_path = csv_path
-        self.root = root
+        self.cfg = OmegaConf.load(cfg)
+        self.csv_path = self.cfg.csv_path
+        self.root = self.cfg.root
 
         # read dataset-level configs
-        self.num_frames = cfg['num_frame']          # e.g. 5
-        self.gt_size = cfg['gt_size']              # e.g. 512
-        self.interval_list = cfg['interval_list']  # e.g. [1]
-        self.random_reverse = cfg['random_reverse']  # false
-        self.use_hflip = cfg['use_hflip']          # true
-        self.use_rot = cfg['use_rot']              # false
-        self.flip_sequence = cfg.get('flip_sequence', False)  # false
+        self.num_frames = self.cfg['num_frames']          # e.g. 5
+        self.gt_size = list(self.cfg['gt_size'])              # e.g. 512
+        self.interval_list = self.cfg['frame_interval']  # e.g. [1]
+        self.random_reverse = self.cfg['random_reverse']  # false
+        self.use_hflip = self.cfg['use_hflip']          # true
+        self.use_rot = self.cfg['use_rot']              # false
+        self.flip_sequence = self.cfg.get('flip_sequence', False)  # false
 
         # read CSV => self.samples
         samples = []
@@ -71,7 +71,7 @@ class RealVSRCSVVideoDataset(Dataset):
         self.samples = samples
 
         # parse degrade_1
-        d1 = cfg['degradation_1']
+        d1 = self.cfg['degradation_1']
         self.random_blur_1 = RandomBlur(**d1.get('random_blur', {}))
         self.random_resize_1 = RandomResize(**d1.get('random_resize', {}))
         self.random_noise_1 = RandomNoise(**d1.get('random_noise', {}))
@@ -79,7 +79,7 @@ class RealVSRCSVVideoDataset(Dataset):
         self.random_mpeg_1 = RandomVideoCompression(**d1.get('random_mpeg', {}))
 
         # parse degrade_2
-        d2 = cfg['degradation_2']
+        d2 = self.cfg['degradation_2']
         self.random_blur_2 = RandomBlur(**d2.get('random_blur', {}))
         self.random_resize_2 = RandomResize(**d2.get('random_resize', {}))
         self.random_noise_2 = RandomNoise(**d2.get('random_noise', {}))
@@ -90,7 +90,7 @@ class RealVSRCSVVideoDataset(Dataset):
         self.blur_final = RandomBlur(**d2.get('blur_final', {}))
 
         # parse transforms
-        tcfg = cfg['transforms']
+        tcfg = self.cfg['transforms']
         self.usm = UnsharpMasking(**tcfg.get('usm', {}))
         self.clip = Clip(**tcfg.get('clip', {}))
         self.rescale = RescaleToZeroOne(**tcfg.get('rescale', {}))
@@ -98,18 +98,18 @@ class RealVSRCSVVideoDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, index):
-        # retry logic if video is broken
-        for _ in range(5):
-            try:
-                return self._getitem_core(index)
-            except Exception as e:
-                print(f'[WARN] index={index}, error={e}, pick new index...')
-                index = random.randint(0, len(self.samples)-1)
-        raise RuntimeError("Too many repeated failures in dataset loading.")
+    # def __getitem__(self, index):
+    #     # retry logic if video is broken
+    #     for _ in range(5):
+    #         try:
+    #             return self._getitem_core(index)
+    #         except Exception as e:
+    #             print(f'[WARN] index={index}, error={e}, pick new index...')
+    #             index = random.randint(0, len(self.samples)-1)
+    #     raise RuntimeError("Too many repeated failures in dataset loading.")
 
-    def _getitem_core(self, index):
-        index = 0
+    def __getitem__(self, index):
+        # index = 0
         path, caption = self.samples[index]
 
         # 1) load entire video => (T, C, H, W)
@@ -117,8 +117,10 @@ class RealVSRCSVVideoDataset(Dataset):
             filename=path, pts_unit="sec", output_format="TCHW"
         )
         total_frames = vframes.shape[0]
-        if total_frames < self.num_frames:
-            raise ValueError(f"Video {path} has only {total_frames} frames; need {self.num_frames}.")
+        # if total_frames < self.num_frames:
+        #     print(f"Video {path} has only {total_frames} frames; interpolating to {self.num_frames}.")
+        #     vframes = self.temporal_interpolate(vframes, self.num_frames)
+        #     total_frames = self.num_frames
 
         # 2) pick an interval from interval_list => sample contiguous frames
         interval = random.choice(self.interval_list)  # e.g. [1] => just 1
@@ -139,7 +141,7 @@ class RealVSRCSVVideoDataset(Dataset):
 
         # 6) random crop GT
         frame_list = [clip_np[i] for i in range(clip_np.shape[0])]
-        frame_list = single_random_crop(frame_list, self.gt_size, path)
+        frame_list = single_random_crop_video(frame_list, self.gt_size, path)
 
         # 7) augment: horizontal flips or rotation if configured
         #    realvsr code calls `augment(imgs, use_hflip, use_rot)`
@@ -179,18 +181,41 @@ class RealVSRCSVVideoDataset(Dataset):
         # 14) convert to TCHW torch tensor
         out_dict['gts'] = img2tensor(out_dict['gts'], bgr2rgb=False)  # => (T,C,H,W)
         out_dict['lqs'] = img2tensor(out_dict['lqs'], bgr2rgb=False)  # => (T,C,H,W)
-
+        out_dict['gts'] = torch.stack(out_dict['gts'])
+        out_dict['lqs'] = torch.stack(out_dict['lqs'])
+        # Normalize images from [0, 1] to [-1, 1]
+        mean = torch.tensor([0.5, 0.5, 0.5], device=out_dict['gts'].device).view(1, -1, 1, 1)
+        std = torch.tensor([0.5, 0.5, 0.5], device=out_dict['gts'].device).view(1, -1, 1, 1)
+        out_dict['gts'] = (out_dict['gts'] - mean) / std
+        out_dict['lqs'] = (out_dict['lqs'] - mean) / std
         return {
             'lqs': out_dict['lqs'],
             'gts': out_dict['gts'],
             'text': caption,
             'video_path': path
         }
-
+    def temporal_interpolate(self, video: torch.Tensor, target_frames: int) -> torch.Tensor:
+        """
+        Interpolate the video tensor along the temporal dimension to have target_frames frames.
+        video: Tensor of shape (T, C, H, W)
+        Returns a Tensor of shape (target_frames, C, H, W)
+        """
+        video = video.float()  
+        T, C, H, W = video.shape
+        # Reshape so that the temporal dimension becomes the "length" dimension for interpolation.
+        # First, permute to (C, H, W, T) then reshape to (1, C*H*W, T)
+        video_reshaped = video.permute(1, 2, 3, 0).reshape(1, C * H * W, T)
+        # Use linear interpolation (treating the sequence as 1D data) to get target_frames.
+        video_interp = torch.nn.functional.interpolate(
+            video_reshaped, size=target_frames, mode='linear', align_corners=False
+        )
+        # Reshape back to (target_frames, C, H, W)
+        video_interp = video_interp.reshape(C, H, W, target_frames).permute(3, 0, 1, 2)
+        return video_interp
 
 cfg = {
     'num_frame': 32,
-    'gt_size': 512,
+    'gt_size': [720, 1280],
     'interval_list': [1],
     'random_reverse': False,
     'use_hflip': True,
@@ -326,7 +351,7 @@ cfg = {
         },
         'resize_final': {
             'params': {
-                'target_size': [128,128],
+                'target_size': [180,320],
                 'resize_opt': ['bilinear','area','bicubic'],
                 'resize_prob': [0.3333,0.3333,0.3334]
             },

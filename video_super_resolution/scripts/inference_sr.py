@@ -12,7 +12,7 @@ from video_to_video.video_to_video_model import VideoToVideo_sr
 from video_to_video.utils.seed import setup_seed
 from video_to_video.utils.logger import get_logger
 from video_super_resolution.color_fix import adain_color_fix
-
+import torch.nn.functional as F
 from inference_utils import *
 
 logger = get_logger()

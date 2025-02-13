@@ -130,6 +130,45 @@ def prob_mask_like(shape, prob, device):
             mask[0] = False
         return mask
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class StandardCrossAttention(nn.Module):
+    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.0):
+        super().__init__()
+        inner_dim = dim_head * heads
+        context_dim = context_dim or query_dim
+
+        self.heads = heads
+        self.dim_head = dim_head
+
+        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
+        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, query_dim),
+            nn.Dropout(dropout)
+        )
+        self.attention = nn.MultiheadAttention(embed_dim=inner_dim, num_heads=heads, dropout=dropout)
+
+    def forward(self, x, context=None, mask=None):
+        context = context or x
+        q = self.to_q(x)
+        k = self.to_k(context)
+        v = self.to_v(context)
+
+        # Reshape for multihead attention
+        q = q.permute(1, 0, 2)  # (seq_len, batch_size, embed_dim)
+        k = k.permute(1, 0, 2)
+        v = v.permute(1, 0, 2)
+
+        # Apply attention
+        attn_output, attn_output_weights = self.attention(q, k, v, key_padding_mask=mask)
+
+        # Reshape back and apply output projection
+        attn_output = attn_output.permute(1, 0, 2)  # (batch_size, seq_len, embed_dim)
+        return self.to_out(attn_output)
 
 class MemoryEfficientCrossAttention(nn.Module):
 
@@ -427,6 +466,7 @@ class BasicTransformerBlock(nn.Module):
         super().__init__()
         self.local_type = local_type
         self.is_ctrl = is_ctrl
+        # attn_cls = StandardCrossAttention
         attn_cls = MemoryEfficientCrossAttention
         self.disable_self_attn = disable_self_attn
         self.attn1 = attn_cls(  # self-attn
@@ -438,7 +478,7 @@ class BasicTransformerBlock(nn.Module):
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
 
         attn_cls2 = MemoryEfficientCrossAttention
-            
+        # attn_cls2 = StandardCrossAttention
         self.attn2 = attn_cls2(
             query_dim=dim,
             context_dim=context_dim,

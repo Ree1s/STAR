@@ -80,7 +80,7 @@ def create_experiment_workspace(cfg):
 
     # Create an experiment folder
     model_name = cfg.model["type"].replace("/", "-")
-    exp_name = f"{experiment_index:03d}-F{cfg.num_frames}S{cfg.frame_interval}-{model_name}"
+    exp_name = f"{experiment_index:03d}-{model_name}"
     exp_dir = f"{cfg.outputs}/{exp_name}"
     os.makedirs(exp_dir, exist_ok=True)
     return exp_name, exp_dir

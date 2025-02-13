@@ -4,7 +4,7 @@
 # export ROCR_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.6,max_split_size_mb:128
 
-export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export HIP_VISIBLE_DEVICES=2,3,4,5
 
 # Set MIOpen cache and database paths to avoid SQLite errors
 export MIOPEN_USER_DB_PATH="/group/ossdphi_algo_scratch_14/sichegao/miopen_cache"
@@ -14,7 +14,7 @@ export MIOPEN_CUSTOM_CACHE_DIR=${MIOPEN_USER_DB_PATH}
 rm -rf ${MIOPEN_USER_DB_PATH}
 mkdir -p ${MIOPEN_USER_DB_PATH}
 
-torchrun --nnodes=1 --nproc_per_node=4 scripts/train.py --config configs/mvdit/train/16x256x256.py
+torchrun --nnodes=1 --nproc_per_node=4 video_super_resolution/scripts/train_ddp.py --config configs/star/train/16x256x256.py
 # export RANK=0
 # export WORLD_SIZE=1
 # export LOCAL_RANK=0

@@ -50,15 +50,31 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     tensor.div_(dist.get_world_size())
     return tensor
 
+from typing import Tuple, List
 
-def get_model_numel(model: torch.nn.Module) -> Tuple[int, int]:
+def get_model_numel(model: torch.nn.Module) -> Tuple[int, int, List[str], List[str]]:
     num_params = 0
     num_params_trainable = 0
-    for p in model.parameters():
+    trainable_list = []
+    untrainable_list = []
+    for name, p in model.named_parameters():
         num_params += p.numel()
         if p.requires_grad:
             num_params_trainable += p.numel()
-    return num_params, num_params_trainable
+            trainable_list.append(name)
+        else:
+            untrainable_list.append(name)
+    
+    return num_params, num_params_trainable, trainable_list, untrainable_list
+
+# def get_model_numel(model: torch.nn.Module) -> Tuple[int, int]:
+#     num_params = 0
+#     num_params_trainable = 0
+#     for p in model.parameters():
+#         num_params += p.numel()
+#         if p.requires_grad:
+#             num_params_trainable += p.numel()
+#     return num_params, num_params_trainable
 
 
 def try_import(name):

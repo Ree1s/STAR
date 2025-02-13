@@ -1,3 +1,30 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "-m",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "torch.distributed.run",
+                "--nnodes=1",
+                "--nproc_per_node=2",
+                "--master-port=29501",
+                "video_super_resolution/scripts/train_ddp.py",
+                "--config",
+                "configs/star/train/16x256x256.py"
+              ],
+            "env": {"MIOPEN_CUSTOM_CACHE_DIR": "/group/ossdphi_algo_scratch_14/sichegao/miopen_cache",
+                    "HIP_VISIBLE_DEVICES":"3,4"}
+        }
+    ]
+}
 // {
 //     // Use IntelliSense to learn about possible attributes.
 //     // Hover to view descriptions of existing attributes.
@@ -8,16 +35,19 @@
 //             "name": "Python Debugger: Current File",
 //             "type": "debugpy",
 //             "request": "launch",
-//             "program": "-m",
+//             "program": "${file}",
 //             "console": "integratedTerminal",
 //             "justMyCode": true,
 //             "args": [
-//                 "torch.distributed.run",
-//                 "--nnodes=1",
-//                 "--nproc_per_node=1",
-//                 "scripts/train.py",
-//                 "--config",
-//                 "configs/mvdit/train/16x256x256.py"
+//                 "--solver_mode", "fast", 
+//                 "--steps", "15",
+//                 "--input_path", "/group/ossdphi_algo_scratch_14/sichegao/codes/STAR-main/STAR/input/UDM10/archpeople_blur4.mp4", 
+//                 "--model_path", "./pretrained_weight/heavy_deg.pt", 
+//                 "--prompt", "''", 
+//                 "--upscale", "4", 
+//                 "--max_chunk_len", "24", 
+//                 "--file_name", "debug.mp4", 
+//                 "--save_dir", "./debug",
 //               ],
 //             "env": {"MIOPEN_CUSTOM_CACHE_DIR": "/group/ossdphi_algo_scratch_14/sichegao/miopen_cache"}
 //         }

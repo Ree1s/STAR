@@ -1,20 +1,62 @@
-import torch
+from copy import deepcopy
+
 import colossalai
+import torch
+import torch.distributed as dist
+import wandb
 from colossalai.booster import Booster
+from colossalai.booster.plugin import LowLevelZeroPlugin, TorchDDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
-from openvid.utils.config_utils import parse_configs
-from openvid.utils.train_utils import update_ema
-from openvid.utils.ckpt_utils import save
-from openvid.utils.misc import requires_grad, to_torch_dtype
-from openvid.registry import MODELS, build_module
-from openvid.datasets import DatasetFromCSV, prepare_dataloader
-from openvid.utils.config_utils import create_experiment_workspace, create_tensorboard_writer
-import wandb
+from colossalai.utils import get_current_device
 from tqdm import tqdm
 import sys
 sys.path.append('.')
-from video_to_video_model import VideoToVideo_sr
+from openvid.acceleration.checkpoint import set_grad_checkpoint
+from openvid.acceleration.parallel_states import (
+    get_data_parallel_group,
+    set_data_parallel_group,
+    set_sequence_parallel_group,
+)
+from openvid.acceleration.plugin import ZeroSeqParallelPlugin
+from openvid.datasets import DatasetFromCSV, get_transforms_image, get_transforms_video, prepare_dataloader
+from openvid.registry import MODELS, SCHEDULERS, build_module
+from openvid.utils.ckpt_utils import create_logger, load, model_sharding, record_model_param_shape, save
+from openvid.utils.config_utils import (
+    create_experiment_workspace,
+    create_tensorboard_writer,
+    parse_configs,
+    save_training_config,
+)
+from openvid.utils.misc import all_reduce_mean, format_numel_str, get_model_numel, requires_grad, to_torch_dtype
+from openvid.utils.train_utils import update_ema
+import os
+import ipdb
+from torch.optim import AdamW
+torch.autograd.set_detect_anomaly(True)
+
+from video_to_video.modules import ControlledV2VUNet
+from openvidsr import RealVSRCSVVideoDataset
+from video_to_video.diffusion.diffusion_sdedit import GaussianDiffusion
+from video_to_video.diffusion.schedules_sdedit import noise_schedule
+from video_to_video.modules import FrozenOpenCLIPEmbedder
+from video_to_video.video_to_video_model import VideoToVideo_sr
+from diffusers import AutoencoderKLTemporalDecoder
+from einops import rearrange
+def check_gradients(model: torch.nn.Module):
+    """
+    遍历模型所有参数，打印梯度的均值、标准差、最大绝对值和最小绝对值。
+    """
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            continue
+        else:
+            grad_mean = param.grad.mean().item()
+            grad_std = param.grad.std().item()
+            grad_max = param.grad.abs().max().item()
+            grad_min = param.grad.abs().min().item()
+            print(f"{name}: grad_mean = {grad_mean:.6f}, grad_std = {grad_std:.6f}, "
+                  f"grad_max = {grad_max:.6f}, grad_min = {grad_min:.6f}")
 
 def main():
     # ======================================================
@@ -33,28 +75,50 @@ def main():
     # 2.1. colossalai init distributed training
     colossalai.launch_from_torch({})
     coordinator = DistCoordinator()
-    device = torch.device(f'cuda:{coordinator.local_rank}')
+    device = get_current_device()
     dtype = to_torch_dtype(cfg.dtype)
 
     # 2.2. init logger, tensorboard & wandb
     if not coordinator.is_master():
-        logger = None
+        logger = create_logger(None)
     else:
+        save_training_config(cfg._cfg_dict, exp_dir)
         logger = create_logger(exp_dir)
+        logger.info(f"Experiment directory created at {exp_dir}")
         writer = create_tensorboard_writer(exp_dir)
         if cfg.wandb:
             wandb.init(project="video_super_resolution", name=exp_name, config=cfg._cfg_dict)
 
+    # 2.3. initialize ColossalAI booster
+    if cfg.plugin == "zero2":
+        plugin = LowLevelZeroPlugin(
+            stage=2,
+            precision=cfg.dtype,
+            initial_scale=2**16,
+            max_norm=cfg.grad_clip,
+        )
+        set_data_parallel_group(dist.group.WORLD)
+    elif cfg.plugin == "ddp":
+        plugin = TorchDDPPlugin(
+        )
+        set_data_parallel_group(dist.group.WORLD)
+    elif cfg.plugin == "zero2-seq":
+        plugin = ZeroSeqParallelPlugin(
+            sp_size=cfg.sp_size,
+            stage=2,
+            precision=cfg.dtype,
+            initial_scale=2**16,
+            max_norm=cfg.grad_clip,
+        )
+        set_sequence_parallel_group(plugin.sp_group)
+        set_data_parallel_group(plugin.dp_group)
+    else:
+        raise ValueError(f"Unknown plugin {cfg.plugin}")
+    booster = Booster(plugin=plugin)
     # ======================================================
     # 3. build dataset and dataloader
     # ======================================================
-    dataset = DatasetFromCSV(
-        cfg.data_path,
-        transform=get_transforms_video(cfg.image_size[0]),
-        num_frames=cfg.num_frames,
-        frame_interval=cfg.frame_interval,
-        root=cfg.root,
-    )
+    dataset = RealVSRCSVVideoDataset(cfg.degradation_yaml)
 
     dataloader = prepare_dataloader(
         dataset,
@@ -64,59 +128,152 @@ def main():
         drop_last=True,
         pin_memory=True,
     )
-    logger.info(f"Dataset contains {len(dataset):,} videos ({cfg.data_path})")
-
+    logger.info(f"Dataset contains {len(dataset):,} videos")
+    total_batch_size = cfg.batch_size * dist.get_world_size() // cfg.sp_size
+    logger.info(f"Total batch size: {total_batch_size}")
     # ======================================================
     # 4. build model
     # ======================================================
-    model = VideoToVideo_sr(cfg)
-    model = model.to(device, dtype)
-    model.train()
-
+    model = VideoToVideo_sr(cfg, device=device)
+    # model = model.to(device)
+    # model.train()
+    model_numel, model_numel_trainable, trainable_list, untrainable_list = get_model_numel(model)
+    logger.info(
+        f"Trainable model params: {format_numel_str(model_numel_trainable)}, Total model params: {format_numel_str(model_numel)}"
+    )
+    logger.info(
+        f"Trainable list: {trainable_list}"
+    )
+    logger.info(
+        f"Untrainable list: {untrainable_list}"
+    )
+    # 4.2. create ema
+    ema = deepcopy(model).to(torch.float32).to(device)
+    requires_grad(ema, False)
+    ema_shape_dict = record_model_param_shape(ema)
     # ======================================================
     # 5. optimizer & scheduler
     # ======================================================
-    optimizer = HybridAdam(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr, weight_decay=0, adamw_mode=True
+    # optimizer = HybridAdam(
+    #     filter(lambda p: p.requires_grad, model.generator.parameters()), lr=cfg.lr, weight_decay=0, adamw_mode=True
+    # )
+    optimizer = AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()), 
+        lr=cfg.lr, 
+        weight_decay=0
     )
     lr_scheduler = None
 
+    # 4.6. prepare for training
+    if cfg.grad_checkpoint:
+        set_grad_checkpoint(model.generator)
+    model.train()
+    update_ema(ema, model, decay=0, sharded=False)
+    ema.eval()
+    # =======================================================
+    # 5. boost model for distributed training with colossalai
+    # =======================================================
+    torch.set_default_dtype(dtype)
+    model, optimizer, _, dataloader, lr_scheduler = booster.boost(
+        model=model, optimizer=optimizer, lr_scheduler=lr_scheduler, dataloader=dataloader
+    )
+    torch.set_default_dtype(torch.float)
+    num_steps_per_epoch = len(dataloader)
+    logger.info("Boost model for distributed training")
     # ======================================================
     # 6. training loop
     # ======================================================
-    for epoch in range(cfg.epochs):
+    start_epoch = start_step = log_step = sampler_start_idx = 0
+    running_loss = 0.0
+
+    # 6.1. resume training
+    if cfg.load is not None:
+        logger.info("Loading checkpoint")
+        start_epoch, start_step, sampler_start_idx = load(booster, model, ema, optimizer, lr_scheduler, cfg.load)
+        logger.info(f"Loaded checkpoint {cfg.load} at epoch {start_epoch} step {start_step}")
+    logger.info(f"Training for {cfg.epochs} epochs with {num_steps_per_epoch} steps per epoch")
+
+    dataloader.sampler.set_start_index(sampler_start_idx)
+    model_sharding(ema)
+    # 6.2. training loop
+    for epoch in range(start_epoch, cfg.epochs):
+        dataloader.sampler.set_epoch(epoch)
         dataloader_iter = iter(dataloader)
         logger.info(f"Beginning epoch {epoch}...")
 
         with tqdm(
-            range(len(dataloader)),
+            range(start_step, num_steps_per_epoch),
             desc=f"Epoch {epoch}",
             disable=not coordinator.is_master(),
-            total=len(dataloader),
+            total=num_steps_per_epoch,
+            initial=start_step,
         ) as pbar:
             for step in pbar:
                 batch = next(dataloader_iter)
-                x = batch["video"].to(device, dtype)
-                y = batch["text"]
-
+                x = batch["lqs"].to(device, dtype)
+                y = batch["gts"].to(device, dtype)
+                text = batch["text"]
+                print(batch['video_path'])
                 # Forward pass
-                loss = model(x, y)
+                with torch.cuda.amp.autocast(enabled=True):
+                    loss = model.module.train_losses(x, y, text)
 
                 # Backward pass
                 optimizer.zero_grad()
-                loss.backward()
+                booster.backward(loss=loss, optimizer=optimizer)
+                check_gradients(model)
                 optimizer.step()
 
-                # Log loss values
-                if coordinator.is_master() and (step + 1) % cfg.log_every == 0:
-                    writer.add_scalar("loss", loss.item(), epoch * len(dataloader) + step)
+                # Update EMA
+                update_ema(ema, model.module, optimizer=optimizer)
+
+                # Log loss values:
+                all_reduce_mean(loss)
+                running_loss += loss.item()
+                global_step = epoch * num_steps_per_epoch + step
+                log_step += 1
+
+                # Log to tensorboard
+                if coordinator.is_master() and (global_step + 1) % cfg.log_every == 0:
+                    avg_loss = running_loss / log_step
+                    pbar.set_postfix({"loss": avg_loss, "step": step, "global_step": global_step})
+                    running_loss = 0
+                    log_step = 0
+                    writer.add_scalar("loss", loss.item(), global_step)
                     if cfg.wandb:
-                        wandb.log({"loss": loss.item()})
+                        wandb.log(
+                            {
+                                "iter": global_step,
+                                "num_samples": global_step * total_batch_size,
+                                "epoch": epoch,
+                                "loss": loss.item(),
+                                "avg_loss": avg_loss,
+                            },
+                            step=global_step,
+                        )
 
                 # Save checkpoint
-                if cfg.ckpt_every > 0 and (step + 1) % cfg.ckpt_every == 0:
-                    save(model, optimizer, epoch, step + 1, exp_dir)
-                    logger.info(f"Saved checkpoint at epoch {epoch} step {step + 1}")
+                if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
+                    save(
+                        booster,
+                        model,
+                        ema,
+                        optimizer,
+                        lr_scheduler,
+                        epoch,
+                        step + 1,
+                        global_step + 1,
+                        cfg.batch_size,
+                        coordinator,
+                        exp_dir,
+                        ema_shape_dict,
+                    )
+                    logger.info(
+                        f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
+                    )
+        # the continue epochs are not resumed, so we need to reset the sampler start index and start step
+        dataloader.sampler.set_start_index(0)
+        start_step = 0
 
 if __name__ == "__main__":
     main()

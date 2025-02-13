@@ -1,15 +1,10 @@
-num_frames = 16
-# num_frames = 1
-frame_interval = 3
-# image_size = (16, 16)
-image_size = (256, 256)
+degradation_yaml = 'realbasicvsr.yaml'
 
-# Define dataset
-root = "dataset/OpenVid-1M/video"
-data_path = "dataset/OpenVid-1M/data/train/OpenVid-1M_subset.csv"
+model_path = "./pretrained_weight/heavy_deg.pt"
 
-use_image_transform = False
-num_workers = 4
+
+
+num_workers = 8
 
 # Define acceleration
 dtype = "fp16"
@@ -26,20 +21,9 @@ model = dict(
     enable_flashattn=False,
     enable_layernorm_kernel=False,
 )
-vae = dict(
-    type="VideoAutoencoderKL",
-    from_pretrained="stabilityai/sd-vae-ft-ema",
-)
-text_encoder = dict(
-    type="t5",
-    from_pretrained="DeepFloyd/t5-v1_1-xxl",
-    model_max_length=120,
-    shardformer=False,
-)
-scheduler = dict(
-    type="iddpm",
-    timestep_respacing="",
-)
+
+prediction_type = 'v_prediction'
+
 
 # Others
 seed = 42
@@ -48,11 +32,10 @@ wandb = False
 
 epochs = 1000
 log_every = 10
-ckpt_every = 2500
-load = None
+ckpt_every = 100
+load = 'experiments/003-MVDiT-XL-2/epoch0-global_step100'
 
-batch_size = 8
+batch_size = 1
 # batch_size = 1
-lr = 2e-5
-# lr = 1.25e-6
+lr = 5e-7
 grad_clip = 1.0
