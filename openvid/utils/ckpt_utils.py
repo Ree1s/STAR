@@ -156,13 +156,18 @@ def save(
     os.makedirs(os.path.join(save_dir, "model"), exist_ok=True)
     # Save the model (standard PyTorch model saving)
     # if dist.get_rank() == 0:  # Only save from rank 0
-    torch.save(model.state_dict(), os.path.join(save_dir, "model.pth"))
+    generator_state_dict = {k: v for k, v in model.state_dict().items() if "generator" in k}
+    torch.save(generator_state_dict, os.path.join(save_dir, "generator.pth"))
+    # torch.save(model.state_dict(), os.path.join(save_dir, "model.pth"))
 
 # EMA is not part of the boosted model, so we save it directly
 # if dist.get_world_size() != 1:
 #     model_gathering(ema, shape_dict)
 # if dist.get_rank() == 0:
-    torch.save(ema.state_dict(), os.path.join(save_dir, "ema.pt"))
+    if ema is not None:
+        ema_state_dict = {k: v for k, v in ema.state_dict().items() if "generator" in k}
+
+        torch.save(ema_state_dict,  os.path.join(save_dir, "ema_generator.pth"))
     # model_sharding(ema)
 
 # Save optimizer state

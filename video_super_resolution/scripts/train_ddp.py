@@ -173,7 +173,12 @@ def main():
                 # with torch.autograd.detect_anomaly():
 
                 scaler.scale(loss).backward()
-                # check_gradients(model)
+                grad_clip = 1.0
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+                # if dist.get_rank() == 0:
+
+                    # check_gradients(model)
                 scaler.step(optimizer)
                 scaler.update()
                 # optimizer.step()
