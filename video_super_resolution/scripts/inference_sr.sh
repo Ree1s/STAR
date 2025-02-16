@@ -1,6 +1,6 @@
 #!/bin/bash
 # Set HIP_VISIBLE_DEVICES to specify which GPU(s) to use
-export HIP_VISIBLE_DEVICES=0
+export HIP_VISIBLE_DEVICES=1
 
 # Set MIOpen cache and database paths to avoid SQLite errors
 # export MIOPEN_USER_DB_PATH="/tmp/my-miopen-cache"

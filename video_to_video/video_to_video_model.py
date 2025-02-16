@@ -14,7 +14,7 @@ from video_to_video.diffusion.schedules_sdedit import noise_schedule
 from video_to_video.utils.logger import get_logger
 
 from diffusers import AutoencoderKLTemporalDecoder
-
+import vidtome
 logger = get_logger()
 
 class VideoToVideo_sr():
@@ -70,7 +70,15 @@ class VideoToVideo_sr():
 
         negative_y = text_encoder(self.negative_prompt).detach()
         self.negative_y = negative_y
-
+        self.local_merge_ratio = opt.local_merge_ratio
+        self.global_merge_ratio = opt.global_merge_ratio
+        self.merge_global = opt.merge_global
+        self.global_rand = opt.global_rand
+        self.seed = cfg.seed
+        self.activate_vidtome()
+    def activate_vidtome(self):
+        vidtome.apply_patch(self, self.local_merge_ratio, self.merge_global, self.global_merge_ratio,
+                            seed = self.seed, batch_size=1, align_batch=False, global_rand = self.global_rand)
 
     def test(self, input: Dict[str, Any], total_noise_levels=1000, \
                  steps=50, solver_mode='fast', guide_scale=7.5, max_chunk_len=32):
