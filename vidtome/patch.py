@@ -89,6 +89,84 @@ def compute_merge(module: torch.nn.Module, x: torch.Tensor, tome_info: Dict[str,
     # Return merge op, unmerge op, and merged tokens.
     return m, u, merged_tokens
 
+def compute_merge_local_temporal(module: torch.nn.Module, 
+                                 x: torch.Tensor, 
+                                 tome_info: Dict[str, Any]) -> Tuple[Callable, Callable, torch.Tensor]:
+    """
+    Merges tokens along the temporal dimension.
+    Assumes x is arranged with batch and temporal tokens (e.g. after joining frames).
+    """
+
+    args = tome_info["args"]
+    generator = module.generator
+    # Assume that args["batch_size"] is the number of frames per clip.
+    fsize = x.shape[0] // args["batch_size"]
+    # Rearrange tokens to group frames (you likely already have a join_frame helper)
+    local_tokens = join_frame(x, fsize)
+    
+    m_ops = [join_warper(fsize)]
+    u_ops = [split_warper(fsize)]
+    unm = 0
+    curF = fsize
+    
+    # Recursively merge tokens across frames until only one “merged” frame remains
+    while curF > 1:
+        m, u, ret_dict = merge.bipartite_soft_matching_randframe(
+            local_tokens, curF, args["local_merge_ratio"], unm, 
+            module.generator, args["target_stride"], args["align_batch"]
+        )
+        unm += ret_dict["unm_num"]
+        m_ops.append(m)
+        u_ops.append(u)
+        local_tokens = m(local_tokens)
+        # Update current frame count based on new token count
+        curF = (local_tokens.shape[1] - unm) // x.shape[1]
+    
+    m_func = func_warper(m_ops)
+    u_func = func_warper(u_ops[::-1])
+    
+    return m_func, u_func, local_tokens
+def compute_merge_local_spatial(module: torch.nn.Module, 
+                                x: torch.Tensor, 
+                                tome_info: Dict[str, Any]) -> Tuple[Callable, Callable, torch.Tensor]:
+    """
+    Merges tokens along the spatial dimension.
+    Assumes x represents spatial tokens (e.g. a flattened HxW grid per frame).
+    """
+
+    args = tome_info["args"]
+    generator = module.generator
+    # For spatial merging, you can use a 2D partition algorithm.
+    m, u, ret_dict = merge.bipartite_soft_matching_random2d_hier(
+        x, frame_num=1,  # Since spatial merging is within one frame
+        ratio=args["local_merge_ratio"], 
+        unm_pre=0, 
+        generator=module.generator,
+        target_stride=args["target_stride"], 
+        align_batch=args["align_batch"],
+        merge_mode="replace"
+    )
+    merged_tokens = m(x)
+    return m, u, merged_tokens
+def compute_merge_global(module: torch.nn.Module, 
+                         x: torch.Tensor, 
+                         tome_info: Dict[str, Any]) -> Tuple[Callable, Callable, torch.Tensor]:
+    """
+    Merges tokens globally across the entire set.
+    Assumes a fixed split: for example, the first src_len tokens are used as source.
+    """
+
+    args = tome_info["args"]
+    generator = module.generator
+    # Define a split point (could be based on a fixed ratio or a parameter)
+    src_len = args.get("global_src_len", x.shape[1] // 2)
+    
+    m, u, ret_dict = merge.bipartite_soft_matching_2s(
+        x, src_len, args["global_merge_ratio"], args["align_batch"], 
+        merge_mode="replace", unmerge_chunk=0
+    )
+    merged_tokens = m(x)
+    return m, u, merged_tokens
 
 import torch
 from torch import nn
@@ -128,7 +206,7 @@ def make_basictransformerblock_tome_block(block_class: type) -> type:
 
                 # Normalize and perform token merging.
                 norm_tokens = self.norm1(x_local)
-                m_a, u_a, merged_tokens = compute_merge(self, norm_tokens, self._tome_info)
+                m_a, u_a, merged_tokens = compute_merge_local_spatial(self, norm_tokens, self._tome_info)
                 # Use merged tokens as input to the first attention layer.
                 attn_out = self.attn1(merged_tokens, context=context if self.disable_self_attn else None)
                 # Unmerge the output tokens.
@@ -149,7 +227,7 @@ def make_basictransformerblock_tome_block(block_class: type) -> type:
                 x_local = self.local1(x)
                 norm_tokens = self.norm1(x_local)
                 norm_tokens = rearrange(norm_tokens, "(b h w) f c -> (b f) (h w) c", h=h, w=w)
-                m_a, u_a, merged_tokens = compute_merge(self, norm_tokens, self._tome_info)
+                m_a, u_a, merged_tokens = compute_merge_local_temporal(self, norm_tokens, self._tome_info)
                 norm_tokens = merged_tokens
                 # if u_a.__name__ != 'do_nothing':
                 #     norm_tokens = rearrange(norm_tokens, "b (f n) c -> (b n) f c", b=self._tome_info['args']['batch_size'], f=x.shape[1])
