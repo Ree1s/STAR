@@ -134,18 +134,26 @@ def compute_merge_local_spatial(module: torch.nn.Module,
     Assumes x represents spatial tokens (e.g. a flattened HxW grid per frame).
     """
 
-    args = tome_info["args"]
+    original_h, original_w = tome_info["size"]
+    original_tokens = original_h * original_w
+    downsample = int(math.ceil(math.sqrt(original_tokens // x.shape[1])))
     generator = module.generator
+    args = tome_info["args"]
+    if downsample <= args["max_downsample"]:
+        w = int(math.ceil(original_w / downsample))
+        h = int(math.ceil(original_h / downsample)) if downsample == 1 else int(math.ceil(original_h / downsample)) + 1
+        r = int(x.shape[1] * args["local_merge_ratio"])
     # For spatial merging, you can use a 2D partition algorithm.
-    m, u, ret_dict = merge.bipartite_soft_matching_random2d_hier(
-        x, frame_num=1,  # Since spatial merging is within one frame
-        ratio=args["local_merge_ratio"], 
-        unm_pre=0, 
-        generator=module.generator,
-        target_stride=args["target_stride"], 
-        align_batch=args["align_batch"],
-        merge_mode="replace"
-    )
+        use_rand = False
+        # use_rand = False if x.shape[0] % 2 == 1 else args["use_rand"]
+        m, u = merge.bipartite_soft_matching_random2d(
+            x, w, h, r=r,# Since spatial merging is within one frame
+            sx=2, sy=2, no_rand=not use_rand,
+            generator=module.generator,
+           
+           )
+    else:
+        m, u = (merge.do_nothing, merge.do_nothing)
     merged_tokens = m(x)
     return m, u, merged_tokens
 def compute_merge_global(module: torch.nn.Module, 
@@ -211,8 +219,8 @@ def make_basictransformerblock_tome_block(block_class: type) -> type:
                 attn_out = self.attn1(merged_tokens, context=context if self.disable_self_attn else None)
                 # Unmerge the output tokens.
                 attn_out = u_a(attn_out)
-                if u_a.__name__ != 'do_nothing':
-                    attn_out = rearrange(attn_out, "(b h w) f c -> f (b h w) c", h=h, w=w)
+                # if u_a.__name__ != 'do_nothing':
+                    # attn_out = rearrange(attn_out, "(b h w) f c -> f (b h w) c", h=h, w=w)
                 # Residual connection.
                 x = attn_out + x
 
