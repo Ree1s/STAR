@@ -33,7 +33,7 @@ wandb = False
 epochs = 1000
 log_every = 10
 ckpt_every = 100
-load = 'experiments/003-MVDiT-XL-2/epoch0-global_step100'
+load = None
 
 batch_size = 1
 # batch_size = 1

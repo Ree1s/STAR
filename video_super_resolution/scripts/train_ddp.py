@@ -26,7 +26,7 @@ from video_to_video.modules import ControlledV2VUNet, FrozenOpenCLIPEmbedder
 from openvidsr import RealVSRCSVVideoDataset
 from video_to_video.diffusion.diffusion_sdedit import GaussianDiffusion
 from video_to_video.diffusion.schedules_sdedit import noise_schedule
-from video_to_video.video_to_video_model import VideoToVideo_sr
+from video_to_video.video_to_video_model_train import VideoToVideo_sr
 from diffusers import AutoencoderKLTemporalDecoder
 from einops import rearrange
 
@@ -168,7 +168,7 @@ def main():
                 with torch.cuda.amp.autocast(enabled=True):
                 
                     loss = model.module.train_losses(x, y, text)
-                
+                print(loss.item())
                 optimizer.zero_grad()
                 # with torch.autograd.detect_anomaly():
 

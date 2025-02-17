@@ -156,7 +156,12 @@ def save(
     os.makedirs(os.path.join(save_dir, "model"), exist_ok=True)
     # Save the model (standard PyTorch model saving)
     # if dist.get_rank() == 0:  # Only save from rank 0
-    generator_state_dict = {k: v for k, v in model.state_dict().items() if "generator" in k}
+    # generator_state_dict = {k: v for k, v in model.state_dict().items() if "generator" in k}
+    generator_state_dict = {
+    k[len("generator."):]: v 
+    for k, v in model.state_dict().items() 
+    if k.startswith("generator.")
+}
     torch.save(generator_state_dict, os.path.join(save_dir, "generator.pth"))
     # torch.save(model.state_dict(), os.path.join(save_dir, "model.pth"))
 

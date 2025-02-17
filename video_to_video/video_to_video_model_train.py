@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from video_to_video.modules import *
 from video_to_video.utils.config import cfg
-from video_to_video.diffusion.diffusion_sdedit import GaussianDiffusion
+from video_to_video.diffusion.diffusion_ddim import DiffusionDDIM
 from video_to_video.diffusion.schedules_sdedit import noise_schedule
 from video_to_video.utils.logger import get_logger
 from modelscope.models import TorchModel
@@ -144,26 +144,28 @@ class VideoToVideo_sr(TorchModel):
         logger.info('Load model path {}, with local status {}'.format(cfg.model_path, ret))
 
         # Noise scheduler
-        self.sigmas = noise_schedule(
-            schedule='logsnr_cosine_interp',
-            n=1000,
-            zero_terminal_snr=True,
-            scale_min=2.0,
-            scale_max=4.0)
-        # sigmas = noise_schedule(
+        # self.sigmas = noise_schedule(
         #     schedule='logsnr_cosine_interp',
         #     n=1000,
         #     zero_terminal_snr=True,
         #     scale_min=2.0,
         #     scale_max=4.0)
-        diffusion = GaussianDiffusion(sigmas=self.sigmas)
+
+        diffusion = DiffusionDDIM(schedule='cosine', schedule_param={
+            'num_timesteps': 1000,
+            'cosine_s': 0.008,
+            'zero_terminal_snr': True,
+        },
+        mean_type='v',
+        loss_type='mse',
+        var_type='fixed_small',
+        rescale_timesteps=False,
+        noise_strength=0.1)
         self.diffusion = diffusion
-        logger.info('Build diffusion with GaussianDiffusion')
+        logger.info('Build diffusion with DiffusionDDIM')
 
         # Temporal VAE
-        # vae = AutoencoderKLTemporalDecoder.from_pretrained(
-        #     "stabilityai/stable-video-diffusion-img2vid", cache_dir="/group/ossdphi_algo_scratch_14/sichegao/checkpoints", subfolder="vae", variant="fp16"
-        # ).half()
+
         vae = AutoencoderKLTemporalDecoder.from_pretrained(
             "stabilityai/stable-video-diffusion-img2vid", cache_dir="/group/ossdphi_algo_scratch_14/sichegao/checkpoints", subfolder="vae", variant="fp16"
         )
@@ -181,8 +183,8 @@ class VideoToVideo_sr(TorchModel):
 
         exceptions = ["VideoControlNet", "local1", "local2"]
         self.freeze_parameters_except(self.generator, exceptions)
-        # negative_y = text_encoder(self.negative_prompt).detach()
-        # self.negative_y = negative_y
+        negative_y = text_encoder(self.negative_prompt).detach()
+        self.negative_y = negative_y
 
 
 
@@ -198,54 +200,26 @@ class VideoToVideo_sr(TorchModel):
             # print("x_encoded:", x.mean().item(), x.std().item())
             # print("y_encoded:", y.mean().item(), y.std().item())
             text = self.text_encoder(text)
-        if noise is None:
-            noise = torch.randn_like(y)
+            # text_0 = text.clone()
+            try:
+                text[torch.rand(text.size(0)) < 0.0, :] =self.negative_y
+            except:
+                pass
+        model_kwargs = {'y': text, 'hint': x}
+        # if noise is None:
+        #     noise = torch.randn_like(y)
         bs = y.shape[0]
-        # Sample a random timestep for each video
+        # # Sample a random timestep for each video
         t = torch.randint(
             0,
             self.diffusion.num_timesteps,
             (bs,),
+            dtype=torch.long,
             device=y.device
         )
-        noised_target = self.diffusion.diffuse(y, t)
-        # model_kwargs = [{'y': y}, {'y': self.negative_y}]
-        # model_kwargs.append({'hint': z})
-
-        # Get the target for loss depending on the prediction type
-        if self.opt.prediction_type == 'epsilon':
-            target = noise
-        elif self.opt.prediction_type == 'v_prediction':
-            target = self.diffusion.get_velocity(y, noise, t)
-        else:
-            raise ValueError(
-                f'Unknown prediction type {self.noise_scheduler.config.prediction_type}'
-            )
-        # with amp.autocast(enabled=True):
-
-        model_pred = self.generator(noised_target, t, text, hint=x)
-        # print("model_pred stats: mean =", model_pred.mean().item(), "std =", model_pred.std().item())
-
-
-        loss_v = F.mse_loss(model_pred, target)
-        loss_df = compute_df_loss(
-        model_pred,
-        noise,
-        t,
-        self.diffusion,
-        self.vae,
-        y,
-        df_alpha=2,  # Hyperparameter (e.g., provided in self.opt.df_alpha)
-        chunk_size=3,
-        cutoff_ratio=0.1,
-        t_max=999.0
-    )
-    
-        # total_loss = loss_v 
-        total_loss = loss_v + loss_df
-        print(total_loss.item())
-        # print(loss_df.item())
-        return total_loss
+        loss = self.diffusion.loss(x0=y, t=t, model=self.generator, model_kwargs=model_kwargs)
+        loss = loss.mean()
+        return loss
     def test(self, input: Dict[str, Any], total_noise_levels=1000, \
                  steps=50, solver_mode='fast', guide_scale=7.5, max_chunk_len=32):
         video_data = input['video_data']
