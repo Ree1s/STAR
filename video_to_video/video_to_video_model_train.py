@@ -217,7 +217,7 @@ class VideoToVideo_sr(TorchModel):
             dtype=torch.long,
             device=y.device
         )
-        loss = self.diffusion.loss(x0=y, t=t, model=self.generator, model_kwargs=model_kwargs)
+        loss = self.diffusion.loss(x0=y, t=t, model=self.generator, model_kwargs=model_kwargs, use_df_loss=True, decoder=self.vae)
         loss = loss.mean()
         return loss
     def test(self, input: Dict[str, Any], total_noise_levels=1000, \

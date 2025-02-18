@@ -75,6 +75,29 @@ class DiffusionDDIM(object):
         self.posterior_mean_coef2 = (1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod)
     
 
+    def compute_df_loss(self, x0, t, out, noise, xt, decoder, x_hr, psi, t_max=999, alpha_param=1.0):
+        sigma_t = _i(self.sqrt_one_minus_alphas_cumprod, t, xt)
+        alpha_t = _i(self.sqrt_alphas_cumprod, t, xt)
+        Z_hat = (alpha_t * noise - out) / sigma_t
+        hat_X_H = decoder(Z_hat)
+
+        F_hat_X_H = torch.fft.fft2(hat_X_H, norm='ortho')
+        F_X_H = torch.fft.fft2(x_hr, norm='ortho')
+
+        hat_f_l = F_hat_X_H * psi
+        hat_f_h = F_hat_X_H * (1 - psi)
+        f_l = F_X_H * psi
+        f_h = F_X_H * (1 - psi)
+
+        loss_LF = torch.mean((hat_f_l - f_l)  ** 2, dim=[1, 2, 3])
+        loss_HF = torch.mean((hat_f_h - f_h)  ** 2, dim=[1, 2, 3])
+
+        c_val = (t.float() / t_max) ** alpha_param
+        L_DF = c_val * loss_LF + (1 - c_val) * loss_HF
+
+        b_val = 1 - t.float() / t_max
+        return torch.mean(b_val * L_DF)
+
     def sample_loss(self, x0, noise=None):
         if noise is None:
             noise = torch.randn_like(x0)
@@ -446,6 +469,12 @@ class DiffusionDDIM(object):
             
             # total loss
             loss = loss + loss_vlb
+
+        if use_df_loss:
+            if decoder is None or x_hr is None or psi is None:
+                raise ValueError("When using DF loss, you must provide 'decoder', 'x_hr', 'psi'")
+            df_loss_val = self.compute_df_loss(x0, t, out, noise, xt, decoder, x_hr, psi, tmax, alpha_param)
+            loss = loss + df_loss_val
         return loss
 
     def variational_lower_bound(self, x0, xt, t, model, model_kwargs={}, clamp=None, percentile=None):
