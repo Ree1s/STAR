@@ -87,6 +87,7 @@ class GaussianDiffusion(object):
                 else:
                     u_out = model(xt, t=t, **model_kwargs[1], **model_kwargs[2], variant_info=variant_info)
                 out = u_out + guide_scale * (y_out - u_out)
+                out = out[:, :, :, :68, :120]
 
                 if guide_rescale is not None:
                     assert guide_rescale >= 0 and guide_rescale <= 1

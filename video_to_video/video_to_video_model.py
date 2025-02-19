@@ -75,7 +75,7 @@ class VideoToVideo_sr():
         self.merge_global = opt.merge_global
         self.global_rand = opt.global_rand
         self.seed = cfg.seed
-        self.activate_vidtome()
+        # self.activate_vidtome()
     def activate_vidtome(self):
         vidtome.apply_patch(self, self.local_merge_ratio, self.merge_global, self.global_merge_ratio,
                             seed = self.seed, batch_size=1, align_batch=False, global_rand = self.global_rand)
@@ -99,8 +99,8 @@ class VideoToVideo_sr():
         video_data = video_data.to(self.device)
 
         video_data_feature = self.vae_encode(video_data)
-        torch.save(video_data_feature, "latents.pt")
-        torch.cuda.empty_cache()
+        # video_data_feature = video_data_feature[:, :, :, :68, :120]
+        # torch.cuda.empty_cache()
 
         y = self.text_encoder(y).detach()
 
@@ -108,11 +108,12 @@ class VideoToVideo_sr():
 
             t = torch.LongTensor([total_noise_levels-1]).to(self.device)
             noised_lr = self.diffusion.diffuse(video_data_feature, t)
+            # noised_lr = noised_lr[:, :, :, :68, :120]
 
             model_kwargs = [{'y': y}, {'y': self.negative_y}]
             model_kwargs.append({'hint': video_data_feature})
 
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             chunk_inds = make_chunks(frames_num, interp_f_num=0, max_chunk_len=max_chunk_len) if frames_num > max_chunk_len else None
 
             solver = 'dpmpp_2m_sde' # 'heun' | 'dpmpp_2m_sde' 
@@ -130,9 +131,10 @@ class VideoToVideo_sr():
                 t_min=0,
                 discretization='trailing',
                 chunk_inds=chunk_inds,)
-            torch.cuda.empty_cache()
 
             logger.info(f'sampling, finished.')
+            torch.cuda.empty_cache()
+
             vid_tensor_gen = self.vae_decode_chunk(gen_vid, chunk_size=3)
 
             logger.info(f'temporal vae decoding, finished.')
@@ -210,7 +212,7 @@ def sliding_windows_1d(length, window_size, overlap_size):
     ind = 0
     coords = []
     while ind<length:
-        if ind+window_size*1.25>=length:
+        if ind+window_size>=length:
             coords.append((ind,length))
             break
         else:

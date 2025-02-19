@@ -16,7 +16,22 @@ from timm.models.vision_transformer import Mlp
 
 USE_TEMPORAL_TRANSFORMER = True
 
-
+def align_tensor(x, target):
+    '''
+    Align x spatially to target by center cropping or padding
+    '''
+    _, _, h, w = x.shape
+    _, _, target_h, target_w = target.shape
+    # if x > target
+    if h > target_h or w > target_w:
+        crop_top = (h - target_h) // 2 
+        crop_left = (w - target_w) // 2
+        x = x[:, :, crop_top:crop_top + target_h, crop_left: crop_left + target_w]
+    elif h < target_h or w < target_w:
+        pad_h = target_h - h
+        pad_w = target_w - w
+        x = F.pad(x, (pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2))
+    return x
 class CaptionEmbedder(nn.Module):
     """
     Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
@@ -1609,6 +1624,7 @@ class Vid2VidSDUNet(nn.Module):
         # decoder
         for block in self.output_blocks:
             x = torch.cat([x, xs.pop()], dim=1)
+            # x = torch.cat([x, align_tensor(xs.pop(), x)], dim=1)
             x = self._forward_single(
                 block,
                 x,
@@ -1783,13 +1799,16 @@ class ControlledV2VUNet(Vid2VidSDUNet):
             
         if control is not None:
             x = control.pop() + x
+            # x = align_tensor(control.pop(), x) + x
 
         # decoder
         for block in self.output_blocks:
             if control is None:
                 x = torch.cat([x, xs.pop()], dim=1)
+                # x = torch.cat([x, align_tensor(xs.pop(), x)], dim=1)
             else:
                 x = torch.cat([x, xs.pop() + control.pop()], dim=1)
+                # x = torch.cat([x, align_tensor(xs.pop(), x) + align_tensor(control.pop(), x)], dim=1)
             x = self._forward_single(
                 block,
                 x,

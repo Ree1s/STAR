@@ -91,41 +91,59 @@ def compute_merge(module: torch.nn.Module, x: torch.Tensor, tome_info: Dict[str,
 
 def compute_merge_local_temporal(module: torch.nn.Module, 
                                  x: torch.Tensor, 
-                                 tome_info: Dict[str, Any]) -> Tuple[Callable, Callable, torch.Tensor]:
-    """
-    Merges tokens along the temporal dimension.
-    Assumes x is arranged with batch and temporal tokens (e.g. after joining frames).
-    """
+                                 tome_info: Dict[str, Any],
+                                 h: int,
+                                 w: int) -> Tuple[Callable, Callable, torch.Tensor]:
+    original_h, original_w = tome_info["size"]
+    original_tokens = original_h * original_w
+    downsample = int(math.ceil(math.sqrt(original_tokens // x.shape[1])))
 
     args = tome_info["args"]
     generator = module.generator
-    # Assume that args["batch_size"] is the number of frames per clip.
+
+    # Frame Number and Token Number
     fsize = x.shape[0] // args["batch_size"]
-    # Rearrange tokens to group frames (you likely already have a join_frame helper)
-    local_tokens = join_frame(x, fsize)
-    
-    m_ops = [join_warper(fsize)]
-    u_ops = [split_warper(fsize)]
-    unm = 0
-    curF = fsize
-    
-    # Recursively merge tokens across frames until only one “merged” frame remains
-    while curF > 1:
-        m, u, ret_dict = merge.bipartite_soft_matching_randframe(
-            local_tokens, curF, args["local_merge_ratio"], unm, 
-            module.generator, args["target_stride"], args["align_batch"]
-        )
-        unm += ret_dict["unm_num"]
-        m_ops.append(m)
-        u_ops.append(u)
-        local_tokens = m(local_tokens)
-        # Update current frame count based on new token count
-        curF = (local_tokens.shape[1] - unm) // x.shape[1]
-    
-    m_func = func_warper(m_ops)
-    u_func = func_warper(u_ops[::-1])
-    
-    return m_func, u_func, local_tokens
+    tsize = x.shape[1]
+
+    # Merge tokens in high resolution layers
+    if downsample <= args["max_downsample"]:
+
+        if args["generator"] is None:
+            args["generator"] = init_generator(x.device)
+            # module.generator = module.generator.manual_seed(123)
+        elif args["generator"].device != x.device:
+            args["generator"] = init_generator(x.device, fallback=args["generator"])
+
+        # Local Token Merging!
+
+        local_tokens = join_frame(x, fsize)
+        m_ls = [join_warper(fsize)]
+        u_ls = [split_warper(fsize)]
+        unm = 0
+        curF = fsize
+
+        # Recursive merge multi-frame tokens into one set. Such as 4->1 for 4 frames and 8->2->1 for 8 frames when target stride is 4.
+        while curF > 1:
+            m, u, ret_dict = merge.bipartite_soft_matching_randframe(
+                local_tokens, curF, args["local_merge_ratio"], unm, generator, args["target_stride"], args["align_batch"])
+            unm += ret_dict["unm_num"]
+            m_ls.append(m)
+            u_ls.append(u)
+            local_tokens = m(local_tokens)
+
+            # assert (x.shape[1] - unm) % tsize == 0
+            # Total token number = current frame number * per-frame token number + unmerged token number
+            curF = (local_tokens.shape[1] - unm) // tsize
+
+        merged_tokens = local_tokens
+        m = func_warper(m_ls)
+        u = func_warper(u_ls[::-1])
+    else:
+        m, u = (merge.do_nothing, merge.do_nothing)
+        merged_tokens = x
+
+    # Return merge op, unmerge op, and merged tokens.
+    return m, u, merged_tokens
 def compute_merge_local_spatial(module: torch.nn.Module, 
                                 x: torch.Tensor, 
                                 tome_info: Dict[str, Any]) -> Tuple[Callable, Callable, torch.Tensor]:
@@ -223,10 +241,26 @@ def make_basictransformerblock_tome_block(block_class: type) -> type:
                     # attn_out = rearrange(attn_out, "(b h w) f c -> f (b h w) c", h=h, w=w)
                 # Residual connection.
                 x = attn_out + x
+                norm_tokens = self.norm2(x)
+                merged_tokens = m_a(norm_tokens)
+                # m_a, u_a, merged_tokens = compute_merge_local_spatial(self, norm_tokens, self._tome_info)
+                # Use merged tokens as input to the first attention layer.
+                attn_out = self.attn2(merged_tokens, context=context)
+                # Unmerge the output tokens.
+                attn_out = u_a(attn_out)
+                x = attn_out + x
+                norm_tokens = self.norm3(x)
+                merged_tokens = m_a(norm_tokens)
 
+                # m_a, u_a, merged_tokens = compute_merge_local_spatial(self, norm_tokens, self._tome_info)
+                # Use merged tokens as input to the first attention layer.
+                attn_out = self.ff(merged_tokens)
+                # Unmerge the output tokens.
+                attn_out = u_a(attn_out)
+                x = attn_out + x
                 # Continue with the remaining attention and feed-forward layers.
-                x = self.attn2(self.norm2(x), context=context) + x
-                x = self.ff(self.norm3(x)) + x
+                # x = self.attn2(self.norm2(x), context=context) + x
+                # x = self.ff(self.norm3(x)) + x
                 return x
 
             # --- Branch for temporal local attention ---
@@ -235,23 +269,47 @@ def make_basictransformerblock_tome_block(block_class: type) -> type:
                 x_local = self.local1(x)
                 norm_tokens = self.norm1(x_local)
                 norm_tokens = rearrange(norm_tokens, "(b h w) f c -> (b f) (h w) c", h=h, w=w)
-                m_a, u_a, merged_tokens = compute_merge_local_temporal(self, norm_tokens, self._tome_info)
-                norm_tokens = merged_tokens
+                m_a, u_a, merged_tokens = compute_merge_local_spatial(self, norm_tokens, self._tome_info)
+                # m_a, u_a, merged_tokens = compute_merge_local_temporal(self, norm_tokens, self._tome_info, h, w)
+                # norm_tokens = merged_tokens
                 # if u_a.__name__ != 'do_nothing':
                 #     norm_tokens = rearrange(norm_tokens, "b (f n) c -> (b n) f c", b=self._tome_info['args']['batch_size'], f=x.shape[1])
                 #     attn_out = self.attn1(norm_tokens, context=context if self.disable_self_attn else None)
                 #     attn_out = rearrange(attn_out, "(b n) f c -> b (f n) c", b=self._tome_info['args']['batch_size'], f=x.shape[1])
                 # else:
-                attn_out = self.attn1(norm_tokens, context=context if self.disable_self_attn else None)
+                attn_out = self.attn1(merged_tokens, context=context if self.disable_self_attn else None)
                 attn_out = u_a(attn_out)
-                if u_a.__name__ == 'do_nothing':
-                    attn_out = rearrange(attn_out, "f (b h w) c -> (b h w) f c", h=h, w=w)
+                # attn_out = u_a(attn_out)
+                # if u_a.__name__ == 'do_nothing':
+                attn_out = rearrange(attn_out, "f (b h w) c -> (b h w) f c", h=h, w=w)
                 x = attn_out + x
 
                 # Process with the second local module and cross-attention.
-                x_local = self.local2(x)
-                x = self.attn2(self.norm2(x_local), context=context) + x
-                x = self.ff(self.norm3(x)) + x
+                # x_local = self.local2(x)
+                norm_tokens = self.local2(x)
+                norm_tokens = self.norm3(norm_tokens)
+
+                merged_tokens = m_a(norm_tokens)
+
+                # norm_tokens = rearrange(merged_tokens, "(b h w) f c -> (b f) (h w) c", h=h//2, w=w//2)
+                # m_a, u_a, merged_tokens = compute_merge_local_spatial(self, norm_tokens, self._tome_info)
+                attn_out = self.attn2(merged_tokens, context=context)
+                attn_out = u_a(attn_out)
+                if u_a.__name__ != 'do_nothing':
+                    attn_out = rearrange(attn_out, "f (b h w) c -> (b h w) f c", h=h, w=w)
+
+                x = attn_out + x
+                norm_tokens = self.norm3(x)
+                # norm_tokens = rearrange(norm_tokens, "(b h w) f c -> (b f) (h w) c", h=h//2, w=w//2)
+                # m_a, u_a, merged_tokens = compute_merge_local_spatial(self, norm_tokens, self._tome_info)
+                merged_tokens = m_a(norm_tokens)
+
+                attn_out = self.ff(merged_tokens)
+                attn_out = u_a(attn_out)
+                if u_a.__name__ != 'do_nothing':
+                    attn_out = rearrange(attn_out, "f (b h w) c -> (b h w) f c", h=h, w=w)
+                x = attn_out + x
+                # x = self.ff(self.norm3(x)) + x
                 return x
 
             # --- Default branch (if no special local attention is set) ---
@@ -382,7 +440,8 @@ def apply_patch(
     for name, module in diffusion_model.named_modules():
         # If for some reason this has a different name, create an issue and I'll fix it
         # if isinstance_str(module, "BasicTransformerBlock") and "down_blocks" not in name:
-        if isinstance_str(module, "BasicTransformerBlock"):
+        if isinstance_str(module, "BasicTransformerBlock") and module.local_type is not 'temp':
+        # if isinstance_str(module, "BasicTransformerBlock"):
             make_tome_block_fn = make_basictransformerblock_tome_block
             module.__class__ = make_tome_block_fn(module.__class__)
             module._tome_info = diffusion_model._tome_info

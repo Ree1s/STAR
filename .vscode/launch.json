@@ -23,7 +23,7 @@
                 "--save_dir", "./debug",
               ],
             "env": {"MIOPEN_CUSTOM_CACHE_DIR": "/group/ossdphi_algo_scratch_14/sichegao/miopen_cache",
-                    "HIP_VISIBLE_DEVICES":"1"}
+                    "HIP_VISIBLE_DEVICES":"2"}
         }
     ]
 }

@@ -38,7 +38,7 @@ class STAR():
 
         model_cfg = EasyDict(__name__='model_cfg')
         model_cfg.model_path = self.model_path
-        model_cfg.local_merge_ratio = 0.3
+        model_cfg.local_merge_ratio = 0.9
         model_cfg.global_merge_ratio = 0.3
         model_cfg.merge_global = False
         model_cfg.global_rand = 0.5
