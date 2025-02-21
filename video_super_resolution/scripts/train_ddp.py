@@ -86,7 +86,9 @@ def main():
         sampler=sampler,
         num_workers=cfg.num_workers,
         drop_last=True,
-        pin_memory=True,
+        pin_memory=False,
+        prefetch_factor=1,
+        persistent_workers=True
     )
     logger.info(f"Dataset contains {len(dataset):,} videos")
     total_batch_size = cfg.batch_size * dist.get_world_size()
@@ -97,7 +99,7 @@ def main():
     # ======================================================
     model = VideoToVideo_sr(cfg, device=device).to(device)
     # Wrap model with torch.nn.parallel.DistributedDataParallel
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=False)
     
     # Record model parameters and create EMA model.
     model_numel, model_numel_trainable, trainable_list, untrainable_list = get_model_numel(model.module)
@@ -159,6 +161,9 @@ def main():
                   initial=start_step) as pbar:
             for step in pbar:
                 batch = next(dataloader_iter)
+                # if any(isinstance(x, torch.Tensor) and x.is_cuda for x in batch):
+                #     print("Dataloader is holding CUDA tensors")
+
                 x = batch["lqs"].to(device, dtype)
                 y = batch["gts"].to(device, dtype)
                 text = batch["text"]
@@ -188,7 +193,7 @@ def main():
                 running_loss += loss.item()
                 global_step = epoch * num_steps_per_epoch + step
                 log_step += 1
-                
+                # torch.cuda.empty_cache()
                 if dist.get_rank() == 0 and (global_step + 1) % cfg.log_every == 0:
                     avg_loss = running_loss / log_step
                     pbar.set_postfix({"loss": avg_loss, "step": step, "global_step": global_step})

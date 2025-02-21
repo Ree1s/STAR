@@ -4,11 +4,11 @@ model_path = "./pretrained_weight/heavy_deg.pt"
 
 
 
-num_workers = 8
+num_workers = 1
 
 # Define acceleration
 dtype = "fp16"
-grad_checkpoint = True
+grad_checkpoint = False
 plugin = "zero2"
 sp_size = 1
 
@@ -23,7 +23,7 @@ model = dict(
 )
 
 prediction_type = 'v_prediction'
-
+use_df_loss = False
 
 # Others
 seed = 42

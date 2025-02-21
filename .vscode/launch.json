@@ -10,18 +10,18 @@
             "request": "launch",
             "program": "-m",
             "console": "integratedTerminal",
-            "justMyCode": true,
+            "justMyCode": false,
             "args": [
                 "torch.distributed.run",
                 "--nnodes=1",
-                "--nproc_per_node=2",
-                "--master-port=29501",
+                "--nproc_per_node=1",
+                "--master-port=29505",
                 "video_super_resolution/scripts/train_ddp.py",
                 "--config",
                 "configs/star/train/16x256x256.py"
               ],
             "env": {"MIOPEN_CUSTOM_CACHE_DIR": "/group/ossdphi_algo_scratch_14/sichegao/miopen_cache",
-                    "HIP_VISIBLE_DEVICES":"3,4"}
+                    "HIP_VISIBLE_DEVICES":"3"}
         }
     ]
 }

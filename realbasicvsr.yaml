@@ -1,7 +1,7 @@
 root: "/proj/ossdataset4/sichegao/video"
 csv_path: "/proj/ossdataset4/sichegao/data/train/OpenVidHD.csv"
 
-num_frames: 32
+num_frames: 24
 gt_size: [720, 1280]
 frame_interval: [ 1 ]
 random_reverse: false

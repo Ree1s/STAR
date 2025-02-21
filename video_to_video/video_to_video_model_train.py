@@ -125,6 +125,7 @@ class VideoToVideo_sr(TorchModel):
         # text_encoder
         text_encoder = FrozenOpenCLIPEmbedder(device=self.device, pretrained="laion2b_s32b_b79k")
         text_encoder.model.to(self.device)
+        text_encoder.eval()
         self.text_encoder = text_encoder
         logger.info(f'Build encoder with FrozenOpenCLIPEmbedder')
 
@@ -163,7 +164,7 @@ class VideoToVideo_sr(TorchModel):
         noise_strength=0.1)
         self.diffusion = diffusion
         logger.info('Build diffusion with DiffusionDDIM')
-
+        self.use_df_loss = opt.use_df_loss
         # Temporal VAE
 
         vae = AutoencoderKLTemporalDecoder.from_pretrained(
@@ -175,7 +176,6 @@ class VideoToVideo_sr(TorchModel):
         self.vae = vae
         logger.info('Build Temporal VAE')
 
-        torch.cuda.empty_cache()
 
         self.negative_prompt = cfg.negative_prompt
         self.positive_prompt = cfg.positive_prompt
@@ -185,15 +185,18 @@ class VideoToVideo_sr(TorchModel):
         self.freeze_parameters_except(self.generator, exceptions)
         negative_y = text_encoder(self.negative_prompt).detach()
         self.negative_y = negative_y
+        torch.cuda.empty_cache()
 
 
 
 
     def train_losses(self, x, y, text, model_kwargs=None, noise=None):
         B, T, C, H, W = x.shape
-        x = x.view(B * T, C, H, W)
+        # x = x.view(B * T, C, H, W)
+        x = x.reshape(B * T, C, H, W)
         x = F.interpolate(x, scale_factor=4, mode='bilinear')
-        x = x.view(B, T, C, x.shape[2], x.shape[3])
+        x = x.reshape(B, T, C, x.shape[2], x.shape[3])
+        # x = x.view(B, T, C, x.shape[2], x.shape[3])
         with torch.no_grad():
             x = self.vae_encode(x)
             y = self.vae_encode(y)
@@ -217,7 +220,7 @@ class VideoToVideo_sr(TorchModel):
             dtype=torch.long,
             device=y.device
         )
-        loss = self.diffusion.loss(x0=y, t=t, model=self.generator, model_kwargs=model_kwargs, use_df_loss=True, decoder=self.vae)
+        loss = self.diffusion.loss(x0=y, t=t, model=self.generator, model_kwargs=model_kwargs, use_df_loss=self.use_df_loss, decoder=self.vae)
         loss = loss.mean()
         return loss
     def test(self, input: Dict[str, Any], total_noise_levels=1000, \
@@ -360,7 +363,7 @@ def sliding_windows_1d(length, window_size, overlap_size):
     ind = 0
     coords = []
     while ind<length:
-        if ind+window_size*1.25>=length:
+        if ind+window_size>=length:
             coords.append((ind,length))
             break
         else:

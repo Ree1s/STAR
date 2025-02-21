@@ -388,7 +388,7 @@ class DiffusionDDIM(object):
                 eps_cache.pop(0)
         return xt
 
-    def loss(self, x0, t, model, model_kwargs={}, noise=None, weight = None, use_div_loss= False, loss_mask=None):
+    def loss(self, x0, t, model, model_kwargs={}, noise=None, weight = None, use_div_loss= False, use_df_loss=False, decoder=None, loss_mask=None):
 
         # noise = torch.randn_like(x0) if noise is None else noise # [80, 4, 8, 32, 32]
         noise = self.sample_loss(x0, noise)
